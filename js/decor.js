@@ -539,6 +539,346 @@ function buildArchway() {
   return g;
 }
 
+// ----------------------------------------------------------------
+// WAVE 6 — additional warm, realistic living-space props.
+// ----------------------------------------------------------------
+
+// Slim brass floor lamp with a warm fabric shade + tiny point light.
+function buildFloorLamp() {
+  const g = new THREE.Group();
+  const brassMat = matBrass();
+
+  // weighted brass base + slim pole
+  addMesh(g, geo('lamp_base', () => new THREE.CylinderGeometry(0.26, 0.3, 0.06, 20)), brassMat, 0, 0.03, 0);
+  addMesh(g, geo('lamp_baseTrim', () => new THREE.TorusGeometry(0.26, 0.02, 8, 20)), brassMat, 0, 0.06, 0)
+    .rotation.x = Math.PI / 2;
+  addMesh(g, geo('lamp_pole', () => new THREE.CylinderGeometry(0.03, 0.035, 1.7, 10)), brassMat, 0, 0.9, 0);
+  addMesh(g, geo('lamp_neck', () => new THREE.SphereGeometry(0.05, 12, 10)), brassMat, 0, 1.74, 0);
+
+  // warm fabric shade — gently emissive cream cone (open both ends)
+  const shadeMat = warmAccent(0xfff0cf, 0.32, 0.85, 0.0);
+  shadeMat.side = THREE.DoubleSide;
+  addMesh(g, geo('lamp_shade', () => new THREE.CylinderGeometry(0.3, 0.42, 0.42, 22, 1, true)),
+    shadeMat, 0, 1.94, 0);
+
+  // tiny warm point light inside the shade (minimal)
+  const bulb = new THREE.PointLight(0xffe2ad, 0.5, 4.5, 2.0);
+  bulb.position.set(0, 1.9, 0);
+  g.add(bulb);
+
+  return g;
+}
+
+// Upholstered 2-seat sofa: cushioned seat + back + arms, warm fabric.
+function buildSofa() {
+  const g = new THREE.Group();
+  const woodMat = matWood();
+  // tasteful warm taupe/teal fabric
+  const fabMat = mat('sofa_fabric', () => new THREE.MeshStandardMaterial({
+    color: 0x3f5560, roughness: 0.85, metalness: 0.0,
+  }));
+  const cushMat = mat('sofa_cushion', () => new THREE.MeshStandardMaterial({
+    color: 0x4a6571, roughness: 0.82, metalness: 0.0,
+  }));
+
+  const W = 2.4, D = 1.0;
+  // base / plinth (wood feet feel) + frame
+  addMesh(g, geo('sofa_base', () => new THREE.BoxGeometry(W, 0.28, D)), fabMat, 0, 0.26, 0);
+  // seat cushions (two)
+  const seatGeo = geo('sofa_seat', () => new THREE.BoxGeometry(W / 2 - 0.08, 0.18, D - 0.28));
+  addMesh(g, seatGeo, cushMat, -W / 4 + 0.04, 0.49, 0.05);
+  addMesh(g, seatGeo, cushMat, W / 4 - 0.04, 0.49, 0.05);
+  // back rest + two back cushions
+  addMesh(g, geo('sofa_back', () => new THREE.BoxGeometry(W, 0.7, 0.24)), fabMat, 0, 0.75, -D / 2 + 0.12);
+  const backCushGeo = geo('sofa_backCush', () => new THREE.BoxGeometry(W / 2 - 0.1, 0.5, 0.16));
+  addMesh(g, backCushGeo, cushMat, -W / 4 + 0.05, 0.72, -D / 2 + 0.3);
+  addMesh(g, backCushGeo, cushMat, W / 4 - 0.05, 0.72, -D / 2 + 0.3);
+  // arms
+  const armGeo = geo('sofa_arm', () => new THREE.BoxGeometry(0.26, 0.55, D));
+  addMesh(g, armGeo, fabMat, -W / 2 + 0.13, 0.55, 0);
+  addMesh(g, armGeo, fabMat, W / 2 - 0.13, 0.55, 0);
+  // small wood feet
+  const footGeo = geo('sofa_foot', () => new THREE.CylinderGeometry(0.05, 0.04, 0.14, 8));
+  for (const sx of [-W / 2 + 0.18, W / 2 - 0.18]) {
+    for (const sz of [-D / 2 + 0.16, D / 2 - 0.16]) {
+      addMesh(g, footGeo, woodMat, sx, 0.07, sz);
+    }
+  }
+  return g;
+}
+
+// Framed painting on a low easel/stand — brass frame + soft painted gradient.
+function buildPainting() {
+  const g = new THREE.Group();
+  const woodMat = matWood();
+  const brassMat = matBrass();
+
+  // tripod easel legs
+  const legGeo = geo('paint_leg', () => new THREE.CylinderGeometry(0.03, 0.035, 1.7, 8));
+  const legPlacements = [
+    { x: -0.45, z: 0.1, rx: 0.0, rz: 0.18 },
+    { x: 0.45, z: 0.1, rx: 0.0, rz: -0.18 },
+    { x: 0, z: -0.35, rx: -0.22, rz: 0.0 },
+  ];
+  for (const p of legPlacements) {
+    const leg = addMesh(g, legGeo, woodMat, p.x, 0.83, p.z);
+    leg.rotation.x = p.rx; leg.rotation.z = p.rz;
+  }
+  // crossbar ledge the canvas rests on
+  addMesh(g, geo('paint_ledge', () => new THREE.BoxGeometry(0.95, 0.06, 0.08)), woodMat, 0, 0.7, 0.12);
+
+  // canvas with soft painted gradient (gentle warm sunset tones — low emissive)
+  const canvasMat = mat('paint_canvas', () => new THREE.MeshStandardMaterial({
+    color: 0xd9a96b, emissive: 0x6a4a2a, emissiveIntensity: 0.12,
+    roughness: 0.9, metalness: 0.0,
+  }));
+  const accentMat = mat('paint_accent', () => new THREE.MeshStandardMaterial({
+    color: 0x4a6b7a, roughness: 0.9, metalness: 0.0,
+  }));
+  // canvas panel
+  addMesh(g, geo('paint_canvasPanel', () => new THREE.BoxGeometry(0.92, 1.1, 0.03)), canvasMat, 0, 1.35, 0.1);
+  // a couple of soft painted bands for a "landscape"
+  addMesh(g, geo('paint_band', () => new THREE.BoxGeometry(0.92, 0.28, 0.032)), accentMat, 0, 1.08, 0.105);
+  // brass frame (4 bars)
+  const fbH = geo('paint_frameH', () => new THREE.BoxGeometry(1.0, 0.07, 0.05));
+  const fbV = geo('paint_frameV', () => new THREE.BoxGeometry(0.07, 1.18, 0.05));
+  addMesh(g, fbH, brassMat, 0, 1.93, 0.11);
+  addMesh(g, fbH, brassMat, 0, 0.77, 0.11);
+  addMesh(g, fbV, brassMat, -0.49, 1.35, 0.11);
+  addMesh(g, fbV, brassMat, 0.49, 1.35, 0.11);
+  return g;
+}
+
+// Flat woven area rug with a border. Walk-through (collider null).
+function buildRug() {
+  const g = new THREE.Group();
+  const W = 7.0, D = 5.2; // ~2x1.5 tiles, sits low
+
+  const rugMat = surface('carpet', () => new THREE.MeshStandardMaterial({
+    color: 0x6a3d52, roughness: 0.97, metalness: 0.0,
+  }));
+  // thin slab (raised slightly to avoid z-fighting the floor)
+  addMesh(g, geo('rug_slab', () => new THREE.BoxGeometry(W, 0.04, D)), rugMat, 0, 0.02, 0);
+  // inner field (slightly different tone via a plain fabric)
+  addMesh(g, geo('rug_field', () => new THREE.BoxGeometry(W - 0.9, 0.042, D - 0.9)),
+    standard(0x7a4a2e, 0.97, 0.0), 0, 0.022, 0);
+  // woven border bars (warm cream trim)
+  const trimMat = standard(0xcab488, 0.9, 0.0);
+  const hb = W / 2 - 0.22, vb = D / 2 - 0.22;
+  const barLong = geo('rug_barLong', () => new THREE.BoxGeometry(W - 0.3, 0.043, 0.16));
+  const barShort = geo('rug_barShort', () => new THREE.BoxGeometry(0.16, 0.043, D - 0.3));
+  addMesh(g, barLong, trimMat, 0, 0.024, vb);
+  addMesh(g, barLong, trimMat, 0, 0.024, -vb);
+  addMesh(g, barShort, trimMat, hb, 0.024, 0);
+  addMesh(g, barShort, trimMat, -hb, 0.024, 0);
+  return g;
+}
+
+// Wooden bookshelf with a few shelves of colored book spines.
+function buildBookshelf() {
+  const g = new THREE.Group();
+  const woodMat = matWood();
+
+  const W = 1.4, H = 2.0, D = 0.42;
+  // outer frame: sides, top, bottom, back
+  addMesh(g, geo('shelf_side', () => new THREE.BoxGeometry(0.08, H, D)), woodMat, -W / 2 + 0.04, H / 2, 0);
+  addMesh(g, geo('shelf_side', () => new THREE.BoxGeometry(0.08, H, D)), woodMat, W / 2 - 0.04, H / 2, 0);
+  addMesh(g, geo('shelf_topbot', () => new THREE.BoxGeometry(W, 0.08, D)), woodMat, 0, 0.04, 0);
+  addMesh(g, geo('shelf_topbot', () => new THREE.BoxGeometry(W, 0.08, D)), woodMat, 0, H - 0.04, 0);
+  addMesh(g, geo('shelf_back', () => new THREE.BoxGeometry(W - 0.12, H - 0.12, 0.04)), woodMat, 0, H / 2, -D / 2 + 0.04);
+
+  // shelves + book rows
+  const shelfYs = [0.5, 1.0, 1.5];
+  const shelfGeo = geo('shelf_plank', () => new THREE.BoxGeometry(W - 0.16, 0.05, D - 0.06));
+  const bookGeo = geo('shelf_book', () => new THREE.BoxGeometry(0.1, 0.34, 0.26));
+  const spineColors = [
+    standard(0x8a2a25, 0.7), standard(0x274b6e, 0.7), standard(0x2f6b3a, 0.7),
+    standard(0xb07a2a, 0.7), standard(0x55366a, 0.7), standard(0xb8ac96, 0.7),
+  ];
+  for (const sy of shelfYs) {
+    addMesh(g, shelfGeo, woodMat, 0, sy, 0);
+    // a row of books standing on the shelf
+    const count = 9;
+    const start = -W / 2 + 0.16;
+    const usable = W - 0.32;
+    for (let i = 0; i < count; i++) {
+      const bx = start + (i + 0.5) * (usable / count);
+      const m = spineColors[(i * 2 + Math.round(sy * 10)) % spineColors.length];
+      const book = addMesh(g, bookGeo, m, bx, sy + 0.2, 0.02);
+      book.scale.y = 0.85 + ((i * 7) % 5) * 0.06; // varied heights
+    }
+  }
+  return g;
+}
+
+// Low wood media console + dark flatscreen TV (low-emissive screen).
+function buildTvStand() {
+  const g = new THREE.Group();
+  const woodMat = matWood();
+  const brassMat = matBrass();
+
+  const W = 2.2, H = 0.55, D = 0.5;
+  // console body + top
+  addMesh(g, geo('tv_body', () => new THREE.BoxGeometry(W, H, D)), woodMat, 0, H / 2 + 0.06, 0);
+  addMesh(g, geo('tv_top', () => new THREE.BoxGeometry(W + 0.06, 0.05, D + 0.06)), woodMat, 0, H + 0.085, 0);
+  // two cabinet door lines (brass knobs)
+  const knobGeo = geo('tv_knob', () => new THREE.SphereGeometry(0.035, 10, 8));
+  addMesh(g, knobGeo, brassMat, -0.5, 0.33, D / 2 + 0.005);
+  addMesh(g, knobGeo, brassMat, 0.5, 0.33, D / 2 + 0.005);
+  // small feet
+  const footGeo = geo('tv_foot', () => new THREE.BoxGeometry(0.12, 0.06, 0.12));
+  for (const sx of [-W / 2 + 0.12, W / 2 - 0.12]) {
+    for (const sz of [-D / 2 + 0.1, D / 2 - 0.1]) addMesh(g, footGeo, woodMat, sx, 0.03, sz);
+  }
+
+  // flatscreen TV: dark bezel + low-emissive screen
+  const bezelMat = standard(0x121214, 0.5, 0.3);
+  const screenMat = mat('tv_screen', () => new THREE.MeshStandardMaterial({
+    color: 0x10202a, emissive: 0x16323f, emissiveIntensity: 0.18,
+    roughness: 0.3, metalness: 0.1,
+  }));
+  const tvY = H + 0.11 + 0.62;
+  addMesh(g, geo('tv_bezel', () => new THREE.BoxGeometry(1.7, 1.0, 0.06)), bezelMat, 0, tvY, -0.05);
+  addMesh(g, geo('tv_screenPanel', () => new THREE.BoxGeometry(1.58, 0.88, 0.02)), screenMat, 0, tvY, -0.015);
+  // slim stand neck + foot
+  addMesh(g, geo('tv_neck', () => new THREE.BoxGeometry(0.08, 0.16, 0.06)), bezelMat, 0, H + 0.16, -0.05);
+  addMesh(g, geo('tv_standfoot', () => new THREE.BoxGeometry(0.5, 0.03, 0.16)), bezelMat, 0, H + 0.095, -0.05);
+  return g;
+}
+
+// Tall potted fiddle-leaf / palm in a ceramic pot.
+function buildBigPlant() {
+  const g = new THREE.Group();
+
+  const potMat = mat('bigplant_pot', () => new THREE.MeshStandardMaterial({
+    color: 0xd8cdb8, roughness: 0.55, metalness: 0.0, // glazed ceramic
+  }));
+  addMesh(g, geo('bigplant_pot', () => new THREE.CylinderGeometry(0.42, 0.34, 0.7, 22)), potMat, 0, 0.35, 0);
+  addMesh(g, geo('bigplant_rim', () => new THREE.TorusGeometry(0.42, 0.04, 10, 22)), potMat, 0, 0.7, 0)
+    .rotation.x = Math.PI / 2;
+  addMesh(g, geo('bigplant_soil', () => new THREE.CylinderGeometry(0.38, 0.38, 0.05, 18)),
+    standard(0x231811, 0.98), 0, 0.71, 0);
+
+  // slender trunk
+  const trunkMat = standard(0x5a7038, 0.85, 0.0);
+  addMesh(g, geo('bigplant_trunk', () => new THREE.CylinderGeometry(0.05, 0.08, 1.8, 8)), trunkMat, 0, 1.6, 0);
+
+  // big broad fiddle-leaves (flattened cones/discs) up the trunk
+  const leafMat = mat('bigplant_leaf', () => new THREE.MeshStandardMaterial({
+    color: 0x2f7a36, roughness: 0.8, metalness: 0.0, side: THREE.DoubleSide,
+  }));
+  const leafGeo = geo('bigplant_leafGeo', () => new THREE.SphereGeometry(0.34, 10, 8));
+  const LEAVES = 9;
+  for (let i = 0; i < LEAVES; i++) {
+    const a = (i / LEAVES) * Math.PI * 2 * 1.4;
+    const y = 1.2 + i * 0.18;
+    const leaf = addMesh(g, leafGeo, leafMat, Math.cos(a) * 0.28, y, Math.sin(a) * 0.28);
+    leaf.rotation.order = 'YXZ';
+    leaf.rotation.y = a;
+    leaf.rotation.z = 0.4;
+    leaf.scale.set(1.0, 1.25, 0.12); // broad flat blade
+  }
+  // a crown tuft at the top
+  const tuft = addMesh(g, leafGeo, leafMat, 0, 2.5, 0);
+  tuft.scale.set(1.2, 1.0, 0.14);
+  return g;
+}
+
+// Small wood cabinet bar with a marble top + a couple bottles/glasses.
+function buildMiniBar() {
+  const g = new THREE.Group();
+  const woodMat = matWood();
+  const marbleMat = matMarble();
+  const brassMat = matBrass();
+  const glassMat = surface('glass', () => new THREE.MeshStandardMaterial({
+    color: 0xeef4f6, roughness: 0.06, metalness: 0.0, transparent: true, opacity: 0.35,
+  }));
+
+  const W = 1.2, H = 1.05, D = 0.6;
+  // cabinet body
+  addMesh(g, geo('bar_body', () => new THREE.BoxGeometry(W, H, D)), woodMat, 0, H / 2, 0);
+  // marble counter top
+  addMesh(g, geo('bar_top', () => new THREE.BoxGeometry(W + 0.08, 0.07, D + 0.08)), marbleMat, 0, H + 0.035, 0);
+  // brass kick rail + knobs
+  addMesh(g, geo('bar_rail', () => new THREE.BoxGeometry(W + 0.02, 0.04, 0.03)), brassMat, 0, 0.1, D / 2 + 0.01);
+  const knobGeo = geo('bar_knob', () => new THREE.SphereGeometry(0.035, 10, 8));
+  addMesh(g, knobGeo, brassMat, -0.28, 0.55, D / 2 + 0.005);
+  addMesh(g, knobGeo, brassMat, 0.28, 0.55, D / 2 + 0.005);
+
+  // bottles on the counter (colored glass) + a tumbler
+  const bottleGeo = geo('bar_bottle', () => new THREE.CylinderGeometry(0.05, 0.06, 0.34, 12));
+  const neckGeo = geo('bar_neck', () => new THREE.CylinderGeometry(0.02, 0.025, 0.12, 8));
+  const amber = standard(0x8a4a18, 0.3, 0.0);
+  const green = standard(0x1d5a33, 0.3, 0.0);
+  const topY = H + 0.07;
+  addMesh(g, bottleGeo, amber, -0.32, topY + 0.17, 0.05);
+  addMesh(g, neckGeo, amber, -0.32, topY + 0.4, 0.05);
+  addMesh(g, bottleGeo, green, -0.15, topY + 0.17, -0.05);
+  addMesh(g, neckGeo, green, -0.15, topY + 0.4, -0.05);
+  // a couple of glass tumblers
+  const tumbGeo = geo('bar_tumbler', () => new THREE.CylinderGeometry(0.045, 0.04, 0.1, 12));
+  addMesh(g, tumbGeo, glassMat, 0.2, topY + 0.05, 0.08);
+  addMesh(g, tumbGeo, glassMat, 0.34, topY + 0.05, -0.02);
+  return g;
+}
+
+// Low wood/glass coffee table.
+function buildCoffeeTable() {
+  const g = new THREE.Group();
+  const woodMat = matWood();
+  const glassMat = surface('glass', () => new THREE.MeshStandardMaterial({
+    color: 0xeef4f6, roughness: 0.06, metalness: 0.0, transparent: true, opacity: 0.3,
+    side: THREE.DoubleSide,
+  }));
+
+  const W = 1.5, D = 0.9, topY = 0.46;
+  // glass top with a thin wood rim
+  addMesh(g, geo('coffee_glass', () => new THREE.BoxGeometry(W - 0.1, 0.04, D - 0.1)), glassMat, 0, topY, 0);
+  addMesh(g, geo('coffee_rimL', () => new THREE.BoxGeometry(W, 0.06, 0.06)), woodMat, 0, topY, D / 2 - 0.03);
+  addMesh(g, geo('coffee_rimL', () => new THREE.BoxGeometry(W, 0.06, 0.06)), woodMat, 0, topY, -D / 2 + 0.03);
+  addMesh(g, geo('coffee_rimS', () => new THREE.BoxGeometry(0.06, 0.06, D)), woodMat, W / 2 - 0.03, topY, 0);
+  addMesh(g, geo('coffee_rimS', () => new THREE.BoxGeometry(0.06, 0.06, D)), woodMat, -W / 2 + 0.03, topY, 0);
+  // lower wood shelf
+  addMesh(g, geo('coffee_shelf', () => new THREE.BoxGeometry(W - 0.3, 0.04, D - 0.3)), woodMat, 0, 0.14, 0);
+  // four wood legs
+  const legGeo = geo('coffee_leg', () => new THREE.BoxGeometry(0.07, topY, 0.07));
+  for (const sx of [-W / 2 + 0.1, W / 2 - 0.1]) {
+    for (const sz of [-D / 2 + 0.1, D / 2 - 0.1]) addMesh(g, legGeo, woodMat, sx, topY / 2, sz);
+  }
+  return g;
+}
+
+// Tall ceramic floor vase with a few stems.
+function buildVase() {
+  const g = new THREE.Group();
+
+  const vaseMat = mat('vase_ceramic', () => new THREE.MeshStandardMaterial({
+    color: 0xcdd6d2, roughness: 0.4, metalness: 0.05, // soft glazed celadon
+  }));
+  // bulbous tall vase: base, body, narrowing neck, lip
+  addMesh(g, geo('vase_base', () => new THREE.CylinderGeometry(0.2, 0.26, 0.18, 20)), vaseMat, 0, 0.09, 0);
+  addMesh(g, geo('vase_body', () => new THREE.SphereGeometry(0.3, 20, 16)), vaseMat, 0, 0.55, 0)
+    .scale.set(1, 1.5, 1);
+  addMesh(g, geo('vase_neck', () => new THREE.CylinderGeometry(0.1, 0.18, 0.5, 18)), vaseMat, 0, 1.1, 0);
+  addMesh(g, geo('vase_lip', () => new THREE.TorusGeometry(0.11, 0.025, 8, 18)), vaseMat, 0, 1.34, 0)
+    .rotation.x = Math.PI / 2;
+
+  // a few dried stems + soft blossoms (no emissive)
+  const stemMat = standard(0x6b5a3a, 0.9, 0.0);
+  const stemGeo = geo('vase_stem', () => new THREE.CylinderGeometry(0.012, 0.016, 0.9, 6));
+  const blossomMat = standard(0xc77f8a, 0.85, 0.0);
+  const blossomGeo = geo('vase_blossom', () => new THREE.SphereGeometry(0.07, 8, 6));
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    const lean = 0.18;
+    const stem = addMesh(g, stemGeo, stemMat, Math.cos(a) * 0.04, 1.75, Math.sin(a) * 0.04);
+    stem.rotation.z = Math.cos(a) * lean;
+    stem.rotation.x = -Math.sin(a) * lean;
+    addMesh(g, blossomGeo, blossomMat, Math.cos(a) * 0.24, 2.18, Math.sin(a) * 0.24);
+  }
+  return g;
+}
+
 // Small marble placeholder — used for unknown ids (never throw). Warm, classy.
 function buildPlaceholder() {
   const g = new THREE.Group();
@@ -564,6 +904,17 @@ const BUILDERS = {
   chandelier: buildChandelier,
   cardtable: buildCardTable,
   archway: buildArchway,
+  // wave 6 — living-space props
+  floorlamp: buildFloorLamp,
+  sofa: buildSofa,
+  painting: buildPainting,
+  rug: buildRug,
+  bookshelf: buildBookshelf,
+  tvstand: buildTvStand,
+  bigplant: buildBigPlant,
+  minibar: buildMiniBar,
+  coffeetable: buildCoffeeTable,
+  vase: buildVase,
 };
 
 // ----------------------------------------------------------------
@@ -599,9 +950,20 @@ const COLLIDERS = {
   chandelier: { w: 0.5, d: 0.5 },   // the standing mount/base
   neonsign: { w: 1.3, d: 0.35 },    // thin sign base
   rope: { w: 1.3, d: 0.25 },        // thin: posts + rope line
+  // wave 6 — living-space props
+  floorlamp: { w: 0.32, d: 0.32 },
+  sofa: { w: 1.25, d: 0.55 },
+  painting: { w: 0.55, d: 0.4 },
+  bookshelf: { w: 0.72, d: 0.24 },
+  tvstand: { w: 1.15, d: 0.3 },
+  bigplant: { w: 0.45, d: 0.45 },
+  minibar: { w: 0.65, d: 0.36 },
+  coffeetable: { w: 0.78, d: 0.48 },
+  vase: { w: 0.3, d: 0.3 },
   // walk-through / walk-under
   redcarpet: null,
   archway: null,
+  rug: null,
 };
 
 export function decorCollider(id) {

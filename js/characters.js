@@ -386,11 +386,154 @@ export class NPCManager {
 // =============================================================
 export function makeDealer({ suit = 0x18101f, accent = 0xff2db8, skin = 0xc68642 } = {}) {
   const h = buildHumanoid({ suit, accent, skin, scale: 1 });
-  h.setPose('sit');
+  if (h.setPose) h.setPose('sit'); // seated croupier; falls through gracefully if absent
+
+  // --- Try to reach the right arm's shoulder/elbow pivots so deal()/gesture()
+  // can animate a real jointed arm. buildHumanoid doesn't export limb pivots,
+  // so we locate them structurally; if anything is missing we fall back to
+  // leaning/turning the whole root, which still reads as activity.
+  const rig = findDealerArm(h.root);
+
+  // Capture the seated rest rotations of whatever pivots we found, so each
+  // motion adds on top of the pose and eases back to exactly the rest values.
+  const restShoulderX = rig.shoulder ? rig.shoulder.rotation.x : 0;
+  const restElbowX    = rig.elbow ? rig.elbow.rotation.x : 0;
+  const restRootRotY  = h.root.rotation.y;
+  const restRootRotX  = h.root.rotation.x;
+
+  // --- Motion state. One active motion at a time; deal() requests queue up. ---
+  let active = null;          // { kind, t, dur, cb }
+  const dealQueue = [];       // pending deal callbacks (FIFO)
+
+  function startMotion(kind, dur, cb) {
+    active = { kind, t: 0, dur: Math.max(0.05, dur), cb: (typeof cb === 'function') ? cb : null };
+  }
+
+  // Drive the active motion. `p` is normalized progress 0..1.
+  function applyMotion(p) {
+    const m = active;
+    if (!m) return;
+    try {
+      if (m.kind === 'deal') {
+        // Reach forward then return: a single up-and-back hump.
+        const reach = Math.sin(p * Math.PI);          // 0 -> 1 -> 0
+        if (rig.shoulder) rig.shoulder.rotation.x = restShoulderX - reach * 0.9;
+        if (rig.elbow)    rig.elbow.rotation.x    = restElbowX    - reach * 0.7;
+        if (!rig.shoulder && !rig.elbow) {
+          // Fallback: lean the whole body forward and back.
+          h.root.rotation.x = restRootRotX + reach * 0.12;
+        }
+      } else if (m.kind === 'spin') {
+        // Circular hand wave: combine shoulder + elbow on a phase circle.
+        const a = p * Math.PI * 2;
+        if (rig.shoulder) rig.shoulder.rotation.x = restShoulderX - 0.6 - Math.sin(a) * 0.3;
+        if (rig.elbow)    rig.elbow.rotation.x    = restElbowX    - 0.4 - Math.cos(a) * 0.4;
+        if (!rig.shoulder && !rig.elbow) {
+          h.root.rotation.y = restRootRotY + Math.sin(a) * 0.18;
+        }
+      } else if (m.kind === 'wave') {
+        // Greeting wave: arm raised, hand oscillates side to side a few times.
+        const lift = Math.sin(Math.min(1, p * 1.4) * Math.PI * 0.5); // ease up, hold
+        const osc = Math.sin(p * Math.PI * 6);
+        if (rig.shoulder) rig.shoulder.rotation.x = restShoulderX - lift * 1.4;
+        if (rig.elbow)    rig.elbow.rotation.x    = restElbowX    - lift * 0.9 + osc * 0.25;
+        if (!rig.shoulder && !rig.elbow) {
+          h.root.rotation.y = restRootRotY + osc * 0.12;
+        }
+      } else { // 'nod' — generic small acknowledgement
+        const nod = Math.sin(p * Math.PI * 2);
+        h.root.rotation.x = restRootRotX + nod * 0.06;
+      }
+    } catch (e) { /* never throw from animation */ }
+  }
+
+  // Snap any pivots we drive back to their rest values when a motion ends.
+  function releaseMotion() {
+    try {
+      if (rig.shoulder) rig.shoulder.rotation.x = restShoulderX;
+      if (rig.elbow)    rig.elbow.rotation.x    = restElbowX;
+      h.root.rotation.x = restRootRotX;
+      h.root.rotation.y = restRootRotY;
+    } catch (e) { /* ignore */ }
+  }
+
+  function update(dt) {
+    if (!(dt > 0)) dt = 0;
+    // Preserve existing behavior: the seated pose runs its own subtle idle.
+    try { h.update(dt, false); } catch (e) { /* never throw */ }
+
+    if (active) {
+      active.t += dt;
+      const p = Math.min(1, active.t / active.dur);
+      applyMotion(p);
+      if (p >= 1) {
+        const done = active.cb;
+        const wasDeal = active.kind === 'deal';
+        active = null;
+        releaseMotion();
+        if (done) { try { done(); } catch (e) { /* swallow caller errors */ } }
+        // Start the next queued deal, if any.
+        if (wasDeal && dealQueue.length) {
+          const next = dealQueue.shift();
+          startMotion('deal', 0.5, next);
+        }
+      }
+    }
+  }
+
+  function deal(cb) {
+    // Safe to call repeatedly: queue if a deal (or any motion) is in progress.
+    if (active) {
+      dealQueue.push((typeof cb === 'function') ? cb : null);
+      return;
+    }
+    startMotion('deal', 0.5, cb);
+  }
+
+  function gesture(name) {
+    // Ignore if mid-motion so we never fight an in-flight deal/gesture.
+    if (active) return;
+    if (name === 'spin') startMotion('spin', 0.7, null);
+    else if (name === 'wave') startMotion('wave', 1.1, null);
+    else startMotion('nod', 0.5, null); // unknown -> generic small nod
+  }
+
   return {
     root: h.root,
-    update(dt) { h.update(dt, false); }, // sit pose runs its own subtle idle
+    update,
+    deal,
+    gesture,
     recolor: h.recolor,
     dispose: h.dispose,
   };
+}
+
+// Locate the right arm's shoulder + elbow pivot groups inside a humanoid root.
+// buildHumanoid builds arms as: shoulder Group (positioned at +x for the right
+// arm) containing an elbow Group. We pick the shoulder Group with the largest
+// positive local x and grab its child Group as the elbow. Returns {} parts as
+// null if the structure isn't recognizable, so callers fall back safely.
+function findDealerArm(root) {
+  const result = { shoulder: null, elbow: null };
+  try {
+    const candidates = [];
+    root.traverse((obj) => {
+      // Shoulder/elbow are bare THREE.Group nodes (no geometry of their own).
+      if (obj && obj.isGroup && obj !== root) candidates.push(obj);
+    });
+    // The right shoulder sits at the most positive local x of the arm pivots.
+    let best = null;
+    for (const g of candidates) {
+      // A shoulder group has a child group (the elbow) and is offset on x.
+      const childGroup = g.children && g.children.find((c) => c && c.isGroup);
+      if (!childGroup) continue;
+      if (Math.abs(g.position.x) < 0.12) continue; // skip centered groups (body/head)
+      if (!best || g.position.x > best.position.x) best = g;
+    }
+    if (best) {
+      result.shoulder = best;
+      result.elbow = best.children.find((c) => c && c.isGroup) || null;
+    }
+  } catch (e) { /* structure not recognizable — use root fallback */ }
+  return result;
 }

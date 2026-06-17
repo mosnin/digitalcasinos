@@ -51,6 +51,10 @@ import { openPauseMenu } from './pausemenu.js';
 import { Notify } from './notifications.js';
 import { Music } from './music.js';
 import { maybeShowTutorial } from './tutorial.js';
+// wave 6
+import { createLobby } from './lobby.js';
+import { createSeatedPlay } from './seatedplay.js';
+import { openSeatedGame, closeSeatedGame } from './games.js';
 
 const sfx = (n) => { try { SFX.play(n); } catch (e) {} };
 const qmark = (n, c) => { try { Quests.mark(n, c); } catch (e) {} };
@@ -96,7 +100,11 @@ const casino = createCasino({ economy: Economy, openShop: (kind) => { player.unl
 const hotel = createHotel({ economy: Economy });
 const arena = createArena({ economy: Economy });
 const garden = createGarden({ economy: Economy });
+const lobby = createLobby({ economy: Economy });
 const elevator = createElevator({ destinations: DESTINATIONS });
+const seated = createSeatedPlay({ camera, getPlayer: () => player });
+let seatedActive = false;
+let seatProp = null;
 
 // multiplayer
 const remote = createRemotePlayers();
@@ -148,6 +156,9 @@ function buildPlace(dest) {
     } else if (dest.kind === 'garden') {
       stage = garden.getStage();
       injectExitTrigger(stage);
+    } else if (dest.kind === 'lobby') {
+      stage = lobby.getStage();
+      addLobbyPortals(stage);
     }
   } catch (e) { console.warn('buildPlace failed', dest, e); }
   if (!stage) return null;
@@ -191,9 +202,35 @@ function addHouseGames(st) {
     st.stage.triggers.push({
       pos: new THREE.Vector3(x, 1, z), radius: 2.4,
       prompt: `[E] Play ${def ? def.name : h.type}`,
-      action: () => { player.unlock(); sfx('click'); openGame(h.type, def ? def.mechanics : {}); },
+      action: () => playSeated(h.type, def ? def.mechanics : {}, prop),
     });
   }
+}
+
+// Direct portals from the grand lobby (quick travel without the elevator menu).
+function addLobbyPortals(stage) {
+  if (!stage || !Array.isArray(stage.triggers) || stage._portals) return;
+  stage._portals = true;
+  const mk = (x, z, label, kind) => stage.triggers.push({
+    pos: new THREE.Vector3(x, 1, z), radius: 5, prompt: label,
+    action: () => { const d = DESTINATIONS.find(dd => dd.kind === kind); if (d) travelTo(d); },
+  });
+  mk(-60, 0, '[E] To the Casino Floor', 'casino');
+  mk(60, 0, '[E] To the Racing Arena', 'arena');
+  mk(0, -46, '[E] To the Garden', 'garden');
+}
+
+// ---- seated, in-world game play (camera sits at the real machine) ----
+function playSeated(type, config, prop) {
+  if (seatedActive) return;
+  if (!prop) { player.unlock(); openGame(type, config); return; } // fallback
+  sfx('click');
+  seatedActive = true; seatProp = prop;
+  player.unlock();
+  try {
+    seated.enter({ prop, type, config, onExit: () => { seatedActive = false; seatProp = null; player.lock(); } });
+    openSeatedGame(type, config, { prop, onExit: () => { try { closeSeatedGame(); } catch (e) {} seated.leave(); } });
+  } catch (e) { seatedActive = false; seatProp = null; openGame(type, config); }
 }
 
 // Some stages (e.g. arena) only ship localized/emissive lights, leaving the
@@ -278,7 +315,16 @@ function openElevator() {
   });
 }
 
-// hotel callbacks
+// quick travel with the elevator ride animation
+function travelTo(dest) {
+  if (!dest || dest.id === currentDestId) return;
+  const fromName = (current && current.kind === 'room') ? 'Your Room' : (DESTINATIONS.find(d => d.id === currentDestId) || {}).name || '';
+  player.unlock();
+  elevator.playRide(fromName, dest.name, () => goToDest(dest));
+}
+
+// callbacks
+lobby.onElevator = () => openElevator();
 hotel.onElevator = () => openElevator();
 hotel.onEnterRoom = (roomId, hallId, style) => {
   const ret = DESTINATIONS.find(d => d.id === hallId) || DESTINATIONS.find(d => d.kind === 'hotel');
@@ -358,7 +404,14 @@ function nearestTrigger(pos) {
 }
 function interact() {
   const pos = player.position;
-  if (!isBuildMode() && current && current.parcelsApi && current.parcelsApi.playNearest(pos)) return;
+  // sit down at a placed game you own (3D seated play)
+  if (!isBuildMode() && current && current.parcelsApi && current.parcelsApi.nearestGame) {
+    const ng = current.parcelsApi.nearestGame(pos);
+    if (ng) {
+      if (ng.node) { playSeated(ng.type, ng.config, ng.node); return; }
+      player.unlock(); openGame(ng.type, ng.config); return;
+    }
+  }
   const t = nearestTrigger(pos);
   if (t && typeof t.action === 'function') { try { t.action(); } catch (e) {} }
 }
@@ -394,6 +447,8 @@ function removeNow() {
 document.addEventListener('keydown', (e) => {
   if (!started) return;
   const code = e.code;
+  // while seated at a game, only Escape (stand up) is active
+  if (seatedActive) { if (code === 'Escape') { try { closeSeatedGame(); } catch (e2) {} seated.leave(); } return; }
   if (code === 'Escape') { if (UI.isModalOpen()) { exitBuildMode(); UI.closeAll(); } return; }
   if (code === 'Backquote') { player.unlock(); openPauseMenu(pauseActions); return; }
   if (UI.isModalOpen() && !isBuildMode()) return;
@@ -423,7 +478,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 renderer.domElement.addEventListener('click', () => {
-  if (started && !player.isLocked && (!UI.isModalOpen() || isBuildMode())) { try { SFX.unlock(); } catch (e) {} try { Music.start(); } catch (e) {} player.lock(); }
+  if (started && !seatedActive && !player.isLocked && (!UI.isModalOpen() || isBuildMode())) { try { SFX.unlock(); } catch (e) {} try { Music.start(); } catch (e) {} player.lock(); }
 });
 
 function maybeShowTutorialForce() { try { window.localStorage.removeItem('dc_tutorial'); } catch (e) {} maybeShowTutorial(); }
@@ -507,7 +562,10 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = clock.getDelta();
   if (!started || !current) { postfx.render(scenePlaceholder, camera); return; }
-  if (player.isLocked) player.update(dt);
+  if (seatedActive) {
+    try { seated.update(dt); } catch (e) {}
+    try { if (seatProp && seatProp.userData && seatProp.userData.update) seatProp.userData.update(dt); } catch (e) {}
+  } else if (player.isLocked) player.update(dt);
   try { current.stage.update(dt, { playerPos: player.position, camera, keys: player.keys }); } catch (e) {}
   try { if (current.npc) current.npc.update(dt); } catch (e) {}
   try { patrons.update(dt); } catch (e) {}
@@ -556,7 +614,7 @@ function startGame() {
   try { Music.start(); } catch (e) {}
   try { applyDailyInterest({ economy: Economy }); } catch (e) {}
 
-  goToDest(destByIndexKind('casino', 0));
+  goToDest(DESTINATIONS.find(d => d.kind === 'lobby') || destByIndexKind('casino', 0));
 
   // connect multiplayer after entering the world
   net.connect().then((r) => {

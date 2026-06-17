@@ -24,6 +24,7 @@ import * as THREE from 'three';
 import {
   FLOOR,
   tileCenter, tileFromWorld, parcelKey, isBuildableTile, isAisleTile,
+  largePlots, largePlotAt,
   GAME_CATALOG, DECOR_CATALOG,
 } from './config.js';
 import * as games from './games.js';
@@ -46,6 +47,10 @@ const COL_VELVET   = 0x6e1422; // velvet rope (deep burgundy)
 const COL_HI_OWNED  = 0x3f9d63; // highlight when standing on owned tile
 const COL_HI_BUY    = 0xc9a227; // highlight when on a buyable tile
 const COL_HI_BLOCK  = 0x8a3b3b; // highlight when not buildable
+const COL_LP_OWNED  = 0x1f8a5a; // emerald tint for owned large plots
+
+const LP_MIN_SPACING = 3.0;     // min metres between items inside a large plot
+const LP_KEY_PREFIX  = 'lp:';   // economy key prefix for large plots
 
 const INLAY_W    = 0.06;  // width of an inlaid border line (thin, subtle)
 const POST_H     = 0.95;  // height of owned-plot brass stanchions
@@ -272,6 +277,9 @@ export function attachParcels(stage, economy, hooks) {
 
   // currentTile under the player (set by update); { ti, tj } | null
   let currentTile = null;
+  // last known player world position (set by update) — used for free
+  // placement inside large plots where there is no tile grid.
+  let lastPlayer = { x: 0, z: 0 };
 
   // helper — a buildable, non-aisle tile (aisles are walkways: skip them)
   function isParcelTile(ti, tj) {
@@ -539,6 +547,106 @@ export function attachParcels(stage, economy, hooks) {
   }
 
   // -----------------------------------------------------------------
+  // 2d) LARGE PLOTS — premium big plots bought as one unit and filled
+  // freely with many games/decor. Rendered: a grand inlaid marble/brass
+  // border around plot.rect + a standing placard, and an emerald tint
+  // when owned. Plot key = 'lp:'+plot.id.
+  // -----------------------------------------------------------------
+  const PLOTS = safe(() => largePlots(floor), []) || [];
+  function lpKey(id) { return LP_KEY_PREFIX + id; }
+  function isLpKey(key) { return typeof key === 'string' && key.indexOf(LP_KEY_PREFIX) === 0; }
+  function lpOwned(id) { return safe(() => economy.ownsParcel(lpKey(id)), false); }
+
+  const lpGroup = new THREE.Group();
+  lpGroup.name = 'largePlots';
+  root.add(lpGroup);
+  // shared emerald tint material for owned large plots
+  const lpTintMat = new THREE.MeshBasicMaterial({
+    color: COL_LP_OWNED, transparent: true, opacity: 0.12,
+    depthWrite: false, side: THREE.DoubleSide,
+  });
+  const lpRendered = new Map(); // id -> { tint, placard, ownedShown }
+
+  // A grand inlaid border around a rect (double brass band). Returns a Mesh.
+  function makeLpBorder(rect) {
+    const positions = [];
+    const band = (ax, az, bx, bz) => {
+      positions.push(ax, INLAY_Y, az,  bx, INLAY_Y, az,  bx, INLAY_Y, bz);
+      positions.push(ax, INLAY_Y, az,  bx, INLAY_Y, bz,  ax, INLAY_Y, bz);
+    };
+    const x0 = Math.min(rect[0], rect[2]), x1 = Math.max(rect[0], rect[2]);
+    const z0 = Math.min(rect[1], rect[3]), z1 = Math.max(rect[1], rect[3]);
+    const m = 0.4;            // inset from the true edge
+    const w = 0.16;          // outer band width (grander than tile inlay)
+    const gap = 0.22;        // gap between the two bands
+    for (const off of [0, w + gap]) {
+      const ax0 = x0 + m + off, ax1 = x1 - m - off;
+      const az0 = z0 + m + off, az1 = z1 - m - off;
+      if (ax1 - ax0 < w || az1 - az0 < w) continue;
+      band(ax0, az0, ax1, az0 + w);   // top
+      band(ax0, az1 - w, ax1, az1);   // bottom
+      band(ax0, az0, ax0 + w, az1);   // left
+      band(ax1 - w, az0, ax1, az1);   // right
+    }
+    if (!positions.length) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, inlayMat());
+    mesh.renderOrder = 1;
+    return mesh;
+  }
+
+  function renderLargePlots() {
+    for (const plot of PLOTS) {
+      if (!plot || !Array.isArray(plot.rect)) continue;
+      const id = plot.id;
+      const rect = plot.rect;
+      const cx = (rect[0] + rect[2]) / 2;
+      const cz = (rect[1] + rect[3]) / 2;
+      const z1 = Math.max(rect[1], rect[3]);
+      let rec = lpRendered.get(id);
+      if (!rec) {
+        rec = { tint: null, placard: null, ownedShown: null };
+        // grand border (static — drawn once)
+        const border = safe(() => makeLpBorder(rect), null);
+        if (border) lpGroup.add(border);
+        // standing placard at the near edge, low-emissive warm panel
+        const placard = makePlacard(`${plot.name} — ${plot.price} 🪙`, {
+          fg: '#f3e3c0', bg: 'rgba(28,20,8,0.92)', accent: '#c9a227', poleH: 1.1,
+        });
+        if (placard) {
+          placard.position.set(cx, 0, z1 - 1.2);
+          lpGroup.add(placard);
+          rec.placard = placard;
+        }
+        lpRendered.set(id, rec);
+      }
+      const owned = lpOwned(id);
+      if (owned && !rec.tint) {
+        // emerald floor tint covering the plot interior
+        const q = new THREE.Mesh(QUAD_GEO, lpTintMat);
+        q.scale.set(Math.abs(rect[2] - rect[0]) - 0.8, 1, Math.abs(rect[3] - rect[1]) - 0.8);
+        q.position.set(cx, TINT_Y, cz);
+        q.renderOrder = 2;
+        lpGroup.add(q);
+        rec.tint = q;
+      }
+      if (owned !== rec.ownedShown) {
+        rec.ownedShown = owned;
+        // once owned, hide the price placard (it now reads as your wing)
+        if (rec.placard) rec.placard.visible = !owned;
+      }
+    }
+  }
+
+  // The large plot the player is standing in (or null).
+  function plotUnder(px, pz) {
+    const p = safe(() => largePlotAt(floor, px, pz), null);
+    return p || null;
+  }
+
+  // -----------------------------------------------------------------
   // Prop spawning
   // -----------------------------------------------------------------
   // Track which (key,kind,index) we have already spawned so refresh() is
@@ -551,11 +659,14 @@ export function attachParcels(stage, economy, hooks) {
     if (Number.isFinite(r)) node.rotation.y = r;
   }
 
-  // Position a prop at a tile centre (feet at y=0).
-  function placeAtTile(node, tile) {
+  // Position a prop. Free-placement items carry x/z (large plots); tile
+  // items carry tile:[ti,tj] (single-tile parcels). Feet sit at y=0.
+  function placeProp(node, item) {
     let cx = 0, cz = 0;
-    if (Array.isArray(tile) && tile.length >= 2) {
-      const c = tileCenter(tile[0] | 0, tile[1] | 0);
+    if (item && Number.isFinite(item.x) && Number.isFinite(item.z)) {
+      cx = item.x; cz = item.z;
+    } else if (item && Array.isArray(item.tile) && item.tile.length >= 2) {
+      const c = tileCenter(item.tile[0] | 0, item.tile[1] | 0);
       cx = c.x; cz = c.z;
     }
     node.position.set(cx, 0, cz);
@@ -594,7 +705,7 @@ export function attachParcels(stage, economy, hooks) {
     if (spawned.has(tag)) return;
     const node = safe(() => games.createGameProp(g.type), null);
     if (!node) { spawned.add(tag); return; } // tolerate missing prop
-    placeAtTile(node, g.tile);
+    placeProp(node, g);
     applyRot(node, g.rot);
     node.userData.parcel = { key, index, kind: 'game', type: g.type };
     root.add(node);
@@ -616,7 +727,10 @@ export function attachParcels(stage, economy, hooks) {
     addGameCollider(node);
     spawned.add(tag);
     // refresh the engraved plot placard now that we know the game name
-    if (Array.isArray(g.tile)) safe(() => refreshPlotPlacard(key, g.tile[0] | 0, g.tile[1] | 0));
+    // (single-tile parcels only; large plots manage their own placard)
+    if (!isLpKey(key) && Array.isArray(g.tile)) {
+      safe(() => refreshPlotPlacard(key, g.tile[0] | 0, g.tile[1] | 0));
+    }
   }
 
   function spawnDecor(key, index, d) {
@@ -625,7 +739,7 @@ export function attachParcels(stage, economy, hooks) {
     if (spawned.has(tag)) return;
     const node = safe(() => decor.createDecorProp(d.id), null);
     if (!node) { spawned.add(tag); return; }
-    placeAtTile(node, d.tile);
+    placeProp(node, d);
     applyRot(node, d.rot);
     node.userData.parcel = { key, index, kind: 'decor', type: d.id };
     root.add(node);
@@ -660,6 +774,23 @@ export function attachParcels(stage, economy, hooks) {
         }
         // make sure the engraved placard reflects current contents
         safe(() => refreshPlotPlacard(key, ti, tj));
+      }
+    }
+
+    // large plots: render borders/placards/tint, then spawn saved items
+    // (free placement by x/z under the plot key).
+    safe(() => renderLargePlots());
+    for (const plot of PLOTS) {
+      if (!plot || !plot.id) continue;
+      const key = lpKey(plot.id);
+      if (!safe(() => economy.ownsParcel(key), false)) continue;
+      const gs = safe(() => economy.getGames(key), []) || [];
+      for (let i = 0; i < gs.length; i++) {
+        if (gs[i]) spawnGame(key, i, gs[i]);
+      }
+      const ds = safe(() => economy.getDecor(key), []) || [];
+      for (let i = 0; i < ds.length; i++) {
+        if (ds[i]) spawnDecor(key, i, ds[i]);
       }
     }
   }
@@ -697,6 +828,24 @@ export function attachParcels(stage, economy, hooks) {
     positionGhost();
   }
 
+  // Is some saved item inside a large plot too close to (x,z)?
+  function lpSpotClear(key, x, z, minDist) {
+    const md = (minDist || LP_MIN_SPACING);
+    const md2 = md * md;
+    const lists = [
+      safe(() => economy.getGames(key), []) || [],
+      safe(() => economy.getDecor(key), []) || [],
+    ];
+    for (const list of lists) {
+      for (const it of list) {
+        if (!it || !Number.isFinite(it.x) || !Number.isFinite(it.z)) continue;
+        const dx = it.x - x, dz = it.z - z;
+        if (dx * dx + dz * dz < md2) return false;
+      }
+    }
+    return true;
+  }
+
   // Is the tile under the player a legal spot for the pending item?
   function ghostValidAt(tile) {
     if (!tile || !pending) return false;
@@ -708,6 +857,19 @@ export function attachParcels(stage, economy, hooks) {
 
   function positionGhost() {
     if (!ghost) return;
+    // 1) Free placement inside an OWNED large plot — follow the player.
+    const plot = plotUnder(lastPlayer.x, lastPlayer.z);
+    if (plot && lpOwned(plot.id)) {
+      ghost.position.set(lastPlayer.x, 0, lastPlayer.z);
+      ghost.visible = true;
+      const valid = lpSpotClear(lpKey(plot.id), lastPlayer.x, lastPlayer.z, LP_MIN_SPACING);
+      if (valid !== ghostValidNow) {
+        ghostValidNow = valid;
+        tintGhost(ghostMats, valid ? COL_VALID : COL_INVALID);
+      }
+      return;
+    }
+    // 2) Single-tile parcels — snap to the tile under the player.
     if (currentTile) {
       const c = tileCenter(currentTile.ti, currentTile.tj);
       ghost.position.set(c.x, 0, c.z);
@@ -748,10 +910,24 @@ export function attachParcels(stage, economy, hooks) {
 
     if (!playerPos) return;
     const px = playerPos.x, pz = playerPos.z;
+    lastPlayer.x = px; lastPlayer.z = pz;
     const t = safe(() => tileFromWorld(px, pz), null);
     currentTile = t;
 
-    if (!t) {
+    const plot = plotUnder(px, pz);
+    if (plot) {
+      // Inside a large plot: highlight follows the player freely (emerald
+      // when owned, brass when buyable). No tile snapping here.
+      hiliteTarget.set(px, HILITE_Y, pz);
+      if (!hilite.visible) hilite.position.copy(hiliteTarget);
+      else {
+        hilite.position.x = damp(hilite.position.x, hiliteTarget.x, 14, d);
+        hilite.position.z = damp(hilite.position.z, hiliteTarget.z, 14, d);
+        hilite.position.y = HILITE_Y;
+      }
+      hilite.visible = true;
+      hiliteMat.color.setHex(lpOwned(plot.id) ? COL_HI_OWNED : COL_HI_BUY);
+    } else if (!t) {
       hilite.visible = false;
     } else {
       const c = tileCenter(t.ti, t.tj);
@@ -791,6 +967,28 @@ export function attachParcels(stage, economy, hooks) {
   }
 
   function tryBuyUnderPlayer(playerPos) {
+    const px = playerPos ? playerPos.x : lastPlayer.x;
+    const pz = playerPos ? playerPos.z : lastPlayer.z;
+
+    // Large plot takes priority: buy the whole plot as one unit.
+    const plot = plotUnder(px, pz);
+    if (plot) {
+      const key = lpKey(plot.id);
+      if (safe(() => economy.ownsParcel(key), false)) {
+        toast('You already own this plot.', 'warn');
+        return { ok: false };
+      }
+      const price = Number(plot.price) || 0;
+      const res = safe(() => economy.buyParcel(key, price), { ok: false, reason: 'error' });
+      if (res && res.ok) {
+        toast(`${plot.name} bought for ${price} 🪙`, 'good');
+        refresh();
+      } else {
+        toast((res && res.reason) ? res.reason : 'Could not buy plot.', 'warn');
+      }
+      return res || { ok: false };
+    }
+
     const t = tileUnder(playerPos);
     if (!t) { toast('No tile here.', 'warn'); return { ok: false }; }
     const key = parcelKey(floor, t.ti, t.tj);
@@ -823,6 +1021,58 @@ export function attachParcels(stage, economy, hooks) {
 
   function placeUnderPlayer(playerPos) {
     if (!pending) { toast('Pick something to place first.', 'warn'); return { ok: false }; }
+    const px = playerPos ? playerPos.x : lastPlayer.x;
+    const pz = playerPos ? playerPos.z : lastPlayer.z;
+
+    // ---- Large plot: free placement anywhere inside an OWNED plot ----
+    const plot = plotUnder(px, pz);
+    if (plot) {
+      const key = lpKey(plot.id);
+      if (!safe(() => economy.ownsParcel(key), false)) {
+        toast('You must own this plot to build.', 'warn');
+        return { ok: false };
+      }
+      if (!lpSpotClear(key, px, pz, LP_MIN_SPACING)) {
+        toast('Too close to another item — move a bit.', 'warn');
+        return { ok: false };
+      }
+      if (pending.kind === 'game') {
+        const def = gameDef(pending.type);
+        if (!def) { toast('Unknown game.', 'warn'); return { ok: false }; }
+        const cost = Number(def.cost) || 0;
+        const config = Object.assign({}, def.mechanics);
+        const res = safe(() => economy.addGame(key, pending.type, cost, {
+          x: px, z: pz, rot: ghostRot, config,
+        }), { ok: false, reason: 'error' });
+        if (res && res.ok) {
+          const idx = (res.index != null)
+            ? res.index
+            : ((safe(() => economy.getGames(key), []) || []).length - 1);
+          spawnGame(key, idx, { type: pending.type, x: px, z: pz, rot: ghostRot, config });
+          toast(`${def.name} placed (−${cost} 🪙)`, 'good');
+          return res;
+        }
+        toast((res && res.reason) ? res.reason : 'Could not place game.', 'warn');
+        return res || { ok: false };
+      }
+      // decor inside the plot
+      const ddef = decorDef(pending.type);
+      if (!ddef) { toast('Unknown decoration.', 'warn'); return { ok: false }; }
+      const dcost = Number(ddef.cost) || 0;
+      const dres = safe(() => economy.addDecor(key, pending.type,
+        { x: px, z: pz, rot: ghostRot }, dcost), { ok: false, reason: 'error' });
+      if (dres && dres.ok) {
+        const idx = (dres.index != null)
+          ? dres.index
+          : ((safe(() => economy.getDecor(key), []) || []).length - 1);
+        spawnDecor(key, idx, { id: pending.type, x: px, z: pz, rot: ghostRot });
+        toast(`${ddef.name} placed (−${dcost} 🪙)`, 'good');
+        return dres;
+      }
+      toast((dres && dres.reason) ? dres.reason : 'Could not place decoration.', 'warn');
+      return dres || { ok: false };
+    }
+
     const t = tileUnder(playerPos);
     if (!t) { toast('No tile here.', 'warn'); return { ok: false }; }
     const key = parcelKey(floor, t.ti, t.tj);
@@ -876,10 +1126,11 @@ export function attachParcels(stage, economy, hooks) {
   // Removal
   // -----------------------------------------------------------------
   // Find the registry node nearest to a world point, optionally on a tile.
-  function nearestNode(point, kindFilter, tile) {
+  function nearestNode(point, kindFilter, tile, keyFilter) {
     let best = null, bestD = Infinity;
     for (const [node, meta] of registry) {
       if (kindFilter && meta.kind !== kindFilter) continue;
+      if (keyFilter && meta.key !== keyFilter) continue;
       if (tile) {
         const t = safe(() => tileFromWorld(node.position.x, node.position.z), null);
         if (!t || t.ti !== tile.ti || t.tj !== tile.tj) continue;
@@ -912,6 +1163,35 @@ export function attachParcels(stage, economy, hooks) {
   }
 
   function removeUnderPlayer(playerPos) {
+    const px = playerPos ? playerPos.x : lastPlayer.x;
+    const pz = playerPos ? playerPos.z : lastPlayer.z;
+
+    // ---- Large plot: remove the nearest item by x/z proximity ----
+    const plot = plotUnder(px, pz);
+    if (plot) {
+      const key = lpKey(plot.id);
+      if (!safe(() => economy.ownsParcel(key), false)) {
+        toast('You don’t own this plot.', 'warn');
+        return false;
+      }
+      const hit = nearestNode({ x: px, z: pz }, null, null, key);
+      if (!hit || hit.dist > LP_MIN_SPACING + 1.0) {
+        toast('Nothing here to remove.', 'warn');
+        return false;
+      }
+      const meta = hit.meta;
+      let ok = false;
+      if (meta.kind === 'game') ok = safe(() => economy.removeGame(meta.key, meta.index), false);
+      else ok = safe(() => economy.removeDecor(meta.key, meta.index), false);
+      if (ok) {
+        resyncKey(meta.key, meta.kind);
+        toast('Removed.', 'good');
+        return true;
+      }
+      toast('Could not remove.', 'warn');
+      return false;
+    }
+
     const t = tileUnder(playerPos);
     if (!t) { toast('No tile here.', 'warn'); return false; }
     const key = parcelKey(floor, t.ti, t.tj);
@@ -919,8 +1199,6 @@ export function attachParcels(stage, economy, hooks) {
       toast('You don’t own this tile.', 'warn');
       return false;
     }
-    const px = (playerPos && playerPos.x) || 0;
-    const pz = (playerPos && playerPos.z) || 0;
     const hit = nearestNode({ x: px, z: pz }, null, t);
     if (!hit) { toast('Nothing here to remove.', 'warn'); return false; }
     const { meta } = hit;
@@ -952,7 +1230,7 @@ export function attachParcels(stage, economy, hooks) {
       const g = gs[meta.index];
       config = (g && g.config) || (gameDef(meta.type) && Object.assign({}, gameDef(meta.type).mechanics)) || {};
     }
-    return { type: meta.type, key: meta.key, index: meta.index, config };
+    return { type: meta.type, key: meta.key, index: meta.index, config, node: hit.node || null };
   }
 
   function nearestGame(playerPos)  { return nearestOfKind(playerPos, 'game'); }
@@ -966,8 +1244,20 @@ export function attachParcels(stage, economy, hooks) {
   // Context prompt
   // -----------------------------------------------------------------
   function getPrompt(playerPos) {
+    const px = playerPos ? playerPos.x : lastPlayer.x;
+    const pz = playerPos ? playerPos.z : lastPlayer.z;
+    const plot = plotUnder(px, pz);
+
     // Build mode takes priority.
     if (pending) {
+      // Inside an owned large plot → free placement hint.
+      if (plot) {
+        if (!lpOwned(plot.id)) return '';
+        if (!lpSpotClear(lpKey(plot.id), px, pz, LP_MIN_SPACING)) {
+          return 'Too close — move a bit  ·  rotate [R]  ·  exit [G]';
+        }
+        return 'Place here: [F]  ·  rotate [R]  ·  exit [G]';
+      }
       const t = tileUnder(playerPos);
       if (!t) return '';
       const key = parcelKey(floor, t.ti, t.tj);
@@ -984,6 +1274,13 @@ export function attachParcels(stage, economy, hooks) {
       const def = gameDef(ng.type);
       const name = (def && def.name) || 'Game';
       return `${name}: [E] Sit & Play  ·  [R] Edit`;
+    }
+
+    // Inside a large plot (no nearby game) → buy or build menu.
+    if (plot) {
+      if (lpOwned(plot.id)) return `[B] build menu`;
+      const price = Number(plot.price) || 0;
+      return `[B] Buy ${plot.name} — ${price} 🪙`;
     }
 
     // Standing on a tile → buy / place.

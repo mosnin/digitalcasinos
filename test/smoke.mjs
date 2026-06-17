@@ -9,6 +9,7 @@ const browser = await chromium.launch({
   args: ['--enable-unsafe-swrast', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist', '--ignore-certificate-errors'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: true });
+page.setDefaultTimeout(90000);
 
 page.on('console', (m) => {
   const t = `${m.type()}: ${m.text()}`;
@@ -36,6 +37,10 @@ const probe1 = await page.evaluate(() => {
     canvas: !!document.querySelector('canvas'),
   };
 });
+await page.screenshot({ path: '/tmp/shot_lobby.png' });
+// go to the main casino floor for the rest of the checks
+await page.evaluate(() => { const D = window.DigitalCasinos; D.goToDest(D.DESTINATIONS.find(d => d.id === 'casino0')); });
+await page.waitForTimeout(1200);
 await page.screenshot({ path: '/tmp/shot_floor0.png' });
 console.log('PROBE1', JSON.stringify(probe1));
 console.log('EARLY_ERRORS', errors.length);

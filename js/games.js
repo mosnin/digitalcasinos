@@ -191,15 +191,33 @@ function buildSlots() {
   g.add(box(screenMat, 0.86, 0.56, 0.02, 0, screenY, front - 0.03)); // glass
 
   // Three reel windows with symbols on the glass (soft, not glaring).
+  // Each reel is a thin vertical drum (cylinder laid on its X axis) whose
+  // curved face shows three symbols; rotating it about X scrolls symbols.
+  const reels = [];
+  const reelGeo = geo('slotReel', () => {
+    const cg = new THREE.CylinderGeometry(0.21, 0.21, 0.22, 16, 1, true);
+    cg.rotateZ(Math.PI / 2); // lay the drum so its axis runs along X
+    return cg;
+  });
   for (let i = 0; i < 3; i++) {
+    // A dark drum body, plus a flat symbol face on the front that we retexture.
+    const drumMat = mat(0x141014, { rough: 0.6 });
+    const drum = new THREE.Mesh(reelGeo, drumMat);
+    drum.position.set((i - 1) * 0.29, screenY, front - 0.16);
+    g.add(drum);
+
     const tex = makeTextTexture('7', { bg: '#f4efe2', fg: '#a01f1f', font: 'bold 170px serif' });
     const symMat = tex
       ? new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.15, roughness: 0.5 })
       : mat(C.red, { emissive: C.red, emIntensity: 0.12 });
-    g.add(box(symMat, 0.24, 0.46, 0.01, (i - 1) * 0.29, screenY, front - 0.015));
+    const face = box(symMat, 0.24, 0.46, 0.01, (i - 1) * 0.29, screenY, front - 0.015);
+    g.add(face);
+    // Track the reel: the drum spins, the face shows the current symbol.
+    reels.push({ drum, face, mat: symMat });
     // Brass reel dividers.
     if (i < 2) g.add(box(brassMat, 0.012, 0.5, 0.02, (i - 0.5) * 0.29, screenY, front - 0.018));
   }
+  g.userData._reels = reels;
   // Brass frame around the screen.
   g.add(box(brassMat, 0.98, 0.04, 0.05, 0, screenY + 0.35, front - 0.03));
   g.add(box(brassMat, 0.98, 0.04, 0.05, 0, screenY - 0.35, front - 0.03));
@@ -230,7 +248,85 @@ function buildSlots() {
   g.add(box(darkMat, 0.9, 0.18, 0.24, 0, 0.4, front + 0.02));
   g.add(box(brassMat, 0.9, 0.03, 0.04, 0, 0.49, front + 0.13));
 
+  attachSlotHooks(g, reels);
   return g;
+}
+
+// Slot animation hooks: setSymbols, spin(finalSymbols, cb), update(dt).
+// SLOT_SYMBOLS is the canonical symbol list; emoji are rendered to a canvas.
+function attachSlotHooks(g, reels) {
+  const ud = g.userData;
+  // Per-reel spin state advanced only by update(dt).
+  const spinState = reels.map(() => ({ active: false, vel: 0, stopAt: 0, t: 0, finalSym: 0, cb: null }));
+
+  function setFace(i, symIndex) {
+    try {
+      const r = reels[i];
+      if (!r) return;
+      const sym = SLOT_SYMBOLS[((symIndex % SLOT_SYMBOLS.length) + SLOT_SYMBOLS.length) % SLOT_SYMBOLS.length] || '7';
+      const tex = makeTextTexture(sym, { bg: '#f4efe2', fg: '#a01f1f', font: 'bold 150px serif' });
+      if (tex && r.mat) {
+        if (r.mat.map && r.mat.map.dispose) { try { r.mat.map.dispose(); } catch (e) {} }
+        r.mat.map = tex;
+        r.mat.emissiveMap = tex;
+        r.mat.needsUpdate = true;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  ud.reels = reels.map(r => r.drum);
+
+  ud.setSymbols = function (syms) {
+    try {
+      const a = Array.isArray(syms) ? syms : [0, 0, 0];
+      for (let i = 0; i < reels.length; i++) setFace(i, a[i] | 0);
+    } catch (e) { /* ignore */ }
+  };
+
+  ud.spin = function (finalSymbols, cb) {
+    try {
+      const fin = Array.isArray(finalSymbols) ? finalSymbols : [0, 0, 0];
+      let pending = reels.length;
+      let fired = false;
+      const done = () => { if (!fired && --pending <= 0) { fired = true; if (typeof cb === 'function') { try { cb(); } catch (e) {} } } };
+      for (let i = 0; i < reels.length; i++) {
+        const s = spinState[i];
+        s.active = true;
+        s.vel = 14 + Math.random() * 3;      // rad/s
+        s.t = 0;
+        s.stopAt = 1.0 + i * 0.45;           // staggered stop times
+        s.finalSym = fin[i] | 0;
+        s.cb = done;
+      }
+    } catch (e) { if (typeof cb === 'function') { try { cb(); } catch (e2) {} } }
+  };
+
+  ud.update = function (dt) {
+    try {
+      const d = (typeof dt === 'number' && dt > 0) ? Math.min(dt, 0.05) : 0.016;
+      for (let i = 0; i < spinState.length; i++) {
+        const s = spinState[i];
+        if (!s.active) continue;
+        s.t += d;
+        if (s.t < s.stopAt) {
+          // Decelerate smoothly toward the stop time.
+          const k = Math.max(0, 1 - s.t / s.stopAt);
+          const v = s.vel * (0.25 + 0.75 * k);
+          reels[i].drum.rotation.x += v * d;
+          // Swap a random face during the blur for a scrolling feel.
+          if ((s.t * 20 | 0) % 2 === 0) setFace(i, (Math.random() * SLOT_SYMBOLS.length) | 0);
+        } else {
+          // Land: show the final symbol and settle drum rotation.
+          s.active = false;
+          reels[i].drum.rotation.x = 0;
+          setFace(i, s.finalSym);
+          sfx('reel');
+          const cb = s.cb; s.cb = null;
+          if (typeof cb === 'function') cb();
+        }
+      }
+    } catch (e) { /* never throw from update */ }
+  };
 }
 
 // ---- Roulette table -------------------------------------------------------
@@ -300,10 +396,14 @@ function buildRoulette() {
   head.add(cone);
   head.add(cyl(mat(C.chrome, { metal: 0.85, rough: 0.2 }), 0.025, 0.12, 0, 0.4, 0));
   wheel.add(head);
-  // A little ivory ball resting in the track.
-  wheel.add(cyl(mat(0xf2ead8, { rough: 0.3, metal: 0.1 }), 0.03, 0.03, 0.44, 0.09, 0.12));
+  // A little ivory ball — parented to a pivot so we can orbit it in the track.
+  const ballPivot = new THREE.Group();
+  const ball = cyl(mat(0xf2ead8, { rough: 0.3, metal: 0.1 }), 0.03, 0.03, 0.44, 0.09, 0);
+  ballPivot.add(ball);
+  wheel.add(ballPivot);
   g.add(wheel);
-  g.userData.spin = head; // animation handle for the update loop
+  g.userData.spin = head; // legacy handle (kept for compatibility)
+  attachRouletteHooks(g, head, ballPivot);
 
   // ---- Felt betting layout on the +X side ----
   const layout = new THREE.Group();
@@ -324,6 +424,50 @@ function buildRoulette() {
   g.add(layout);
 
   return g;
+}
+
+// Roulette animation hooks: spinWheel(number, cb) + update(dt).
+// The head's pocket `i` sits at angle (i/37)*2π; settling so pocket `number`
+// lands at the reference angle (top) means head.rotation.y = -(number/37)*2π.
+const ROULETTE_SEG = 37;
+function attachRouletteHooks(g, head, ballPivot) {
+  const ud = g.userData;
+  const st = { active: false, t: 0, dur: 0, headFrom: 0, headTo: 0, ballFrom: 0, ballTo: 0, cb: null };
+
+  ud.spinWheel = function (number, cb) {
+    try {
+      const n = ((number | 0) % ROULETTE_SEG + ROULETTE_SEG) % ROULETTE_SEG;
+      st.active = true;
+      st.t = 0;
+      st.dur = 3.0;
+      // Head spins forward several turns then settles aligned to `number`.
+      st.headFrom = head.rotation.y;
+      const headTarget = -(n / ROULETTE_SEG) * Math.PI * 2;
+      st.headTo = st.headFrom + Math.PI * 2 * 4 + (headTarget - (st.headFrom % (Math.PI * 2)));
+      // Ball orbits the opposite way, ending over the same pocket.
+      st.ballFrom = ballPivot.rotation.y;
+      st.ballTo = st.ballFrom - Math.PI * 2 * 7 - (headTarget);
+      st.cb = (typeof cb === 'function') ? cb : null;
+      sfx('spin');
+    } catch (e) { if (typeof cb === 'function') { try { cb(); } catch (e2) {} } }
+  };
+
+  ud.update = function (dt) {
+    try {
+      if (!st.active) return;
+      const d = (typeof dt === 'number' && dt > 0) ? Math.min(dt, 0.05) : 0.016;
+      st.t += d;
+      let p = Math.min(1, st.t / st.dur);
+      const e = 1 - Math.pow(1 - p, 3); // ease-out cubic
+      head.rotation.y = st.headFrom + (st.headTo - st.headFrom) * e;
+      ballPivot.rotation.y = st.ballFrom + (st.ballTo - st.ballFrom) * e;
+      if (p >= 1) {
+        st.active = false;
+        const cb = st.cb; st.cb = null;
+        if (cb) cb();
+      }
+    } catch (e) { /* never throw */ }
+  };
 }
 
 // ---- Blackjack table ------------------------------------------------------
@@ -401,6 +545,14 @@ function buildBlackjack(withDealer = true) {
   // Printed "INSURANCE PAYS 2 TO 1" arc accent on the felt.
   g.add(cyl(lineMat, 1.05, 0.004, 0, topY + 0.052, 0.1));
 
+  // Card-dealing hooks: player cards land toward +Z, dealer toward -Z.
+  attachCardHooks(g, {
+    topY: topY + 0.065,
+    shoe: { x: 0.85, z: -0.5 },
+    player: { x: -0.35, z: 0.55, dx: 0.22, dz: 0 },
+    dealer: { x: -0.15, z: -0.15, dx: 0.22, dz: 0 },
+  });
+
   // Seat a dealer behind the flat edge (facing +Z toward players).
   if (withDealer) {
     try {
@@ -473,6 +625,14 @@ function buildPoker(withDealer = true) {
   // White "dealer button" accent near a seat.
   g.add(cyl(mat(C.ivory, { rough: 0.4 }), 0.06, 0.018, 1.45, topY + 0.065, 0.35));
 
+  // Card-dealing hooks (player toward +Z, dealer/community toward center/-Z).
+  attachCardHooks(g, {
+    topY: topY + 0.065,
+    shoe: { x: -1.6, z: -0.6 },
+    player: { x: -0.4, z: 0.7, dx: 0.24, dz: 0 },
+    dealer: { x: -0.48, z: 0, dx: 0.24, dz: 0 },
+  });
+
   if (withDealer) {
     try {
       const d = makeDealer({ suit: 0x101426, accent: C.neon2, skin: 0xe0ac69 });
@@ -484,6 +644,104 @@ function buildPoker(withDealer = true) {
   }
 
   return g;
+}
+
+// Card-face texture: a small white card with a rank/suit label (red for ♥♦).
+function makeCardTexture(label) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 128; c.height = 178;
+    const g = c.getContext('2d');
+    g.fillStyle = '#f7f3e8'; g.fillRect(0, 0, 128, 178);
+    g.strokeStyle = '#cfc7b0'; g.lineWidth = 4; g.strokeRect(4, 4, 120, 170);
+    const txt = (label == null) ? '' : String(label);
+    const red = txt.indexOf('♥') >= 0 || txt.indexOf('♦') >= 0;
+    g.fillStyle = red ? '#b22020' : '#1a1a1a';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = 'bold 56px serif';
+    g.fillText(txt, 64, 89);
+    g.font = 'bold 26px serif';
+    g.textAlign = 'left'; g.fillText(txt, 12, 26);
+    const tex = new THREE.CanvasTexture(c);
+    tex.anisotropy = 2;
+    return tex;
+  } catch (e) { return null; }
+}
+
+// Card-dealing hooks shared by blackjack + poker. Cards slide in from the
+// shoe to stacked target slots on the felt. Advanced only via update(dt).
+function attachCardHooks(g, layout) {
+  const ud = g.userData;
+  const topY = layout.topY;
+  const cardGeo = geo('dealCard', () => new THREE.BoxGeometry(0.17, 0.008, 0.25));
+  const holder = new THREE.Group();
+  g.add(holder);
+  const active = [];           // in-flight card animations
+  const cards = [];            // all dealt card meshes (for clearCards)
+  const counts = { player: 0, dealer: 0 };
+
+  ud.clearCards = function () {
+    try {
+      for (const m of cards) {
+        try { holder.remove(m); } catch (e) {}
+        try { if (m.material && m.material.map && m.material.map.dispose) m.material.map.dispose(); } catch (e) {}
+        try { if (m.material && m.material.dispose) m.material.dispose(); } catch (e) {}
+      }
+      cards.length = 0;
+      active.length = 0;
+      counts.player = 0; counts.dealer = 0;
+    } catch (e) { /* ignore */ }
+  };
+
+  ud.dealCard = function (opts, cb) {
+    try {
+      const to = (opts && opts.to === 'dealer') ? 'dealer' : 'player';
+      const slot = layout[to] || layout.player;
+      const n = counts[to]++;
+      const tex = makeCardTexture(opts && opts.label);
+      const m = new THREE.Mesh(cardGeo, tex
+        ? new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55 })
+        : mat(C.ivory, { rough: 0.5 }));
+      const sx = (layout.shoe ? layout.shoe.x : 0);
+      const sz = (layout.shoe ? layout.shoe.z : -0.6);
+      m.position.set(sx, topY + 0.25, sz);
+      const tx = slot.x + (slot.dx || 0) * n;
+      const tz = slot.z + (slot.dz || 0) * n;
+      m.rotation.y = (Math.random() - 0.5) * 0.18;
+      holder.add(m);
+      cards.push(m);
+      active.push({
+        m, t: 0, dur: 0.42,
+        fx: sx, fy: topY + 0.25, fz: sz,
+        tx, ty: topY, tz,
+        cb: (typeof cb === 'function') ? cb : null,
+        sounded: false,
+      });
+      sfx('card');
+    } catch (e) { if (typeof cb === 'function') { try { cb(); } catch (e2) {} } }
+  };
+
+  ud.update = function (dt) {
+    try {
+      const d = (typeof dt === 'number' && dt > 0) ? Math.min(dt, 0.05) : 0.016;
+      for (let i = active.length - 1; i >= 0; i--) {
+        const a = active[i];
+        a.t += d;
+        let p = Math.min(1, a.t / a.dur);
+        const e = 1 - Math.pow(1 - p, 2); // ease-out
+        a.m.position.x = a.fx + (a.tx - a.fx) * e;
+        a.m.position.z = a.fz + (a.tz - a.fz) * e;
+        // slight arc on the way down
+        a.m.position.y = a.fy + (a.ty - a.fy) * e + Math.sin(p * Math.PI) * 0.08;
+        if (p >= 1) {
+          a.m.position.set(a.tx, a.ty, a.tz);
+          active.splice(i, 1);
+          const cb = a.cb; a.cb = null;
+          if (cb) cb();
+        }
+      }
+    } catch (e) { /* never throw */ }
+  };
 }
 
 /**
@@ -508,6 +766,22 @@ export function createGameProp(type) {
     group = new THREE.Group();
     group.add(box(mat(C.woodLight, { rough: 0.6, metal: 0.1 }), 1, 1, 1, 0, 0.5, 0));
   }
+  // Guarantee a no-throw update() so the integrator can always call it, and
+  // also combine it with any dealer update that lives on the prop.
+  try {
+    const ud = group.userData || (group.userData = {});
+    const hookUpdate = (typeof ud.update === 'function') ? ud.update : null;
+    const dealer = ud.dealer;
+    const dealerUpdate = (dealer && typeof dealer.update === 'function') ? dealer.update.bind(dealer) : null;
+    if (hookUpdate || dealerUpdate) {
+      ud.update = function (dt) {
+        if (hookUpdate) { try { hookUpdate(dt); } catch (e) {} }
+        if (dealerUpdate) { try { dealerUpdate(dt); } catch (e) {} }
+      };
+    } else {
+      ud.update = function () {};
+    }
+  } catch (e) { /* ignore */ }
   group.name = `game:${type}`;
   return group;
 }
@@ -1311,6 +1585,523 @@ export function openGame(type, config) {
   } catch (e) {
     // Never throw out of a UI handler.
   }
+}
+
+// =============================================================
+// SEATED PLAY — compact bottom-docked panel driving the 3D prop
+// =============================================================
+// A single live panel at a time. The panel is a plain DOM element appended
+// to document.body (NOT UI.openModal / not full-screen). Each round runs the
+// SAME economy settlement as the modal games, but reveals results only when
+// the matching prop.userData.* animation calls back.
+let _seatedPanel = null;
+let _seatedState = null;
+
+// Inject a small stylesheet once for .seated-panel.
+function ensureSeatedStyles() {
+  try {
+    if (document.getElementById('seated-panel-styles')) return;
+    const s = document.createElement('style');
+    s.id = 'seated-panel-styles';
+    s.textContent = `
+.seated-panel{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+  z-index:9000;min-width:340px;max-width:560px;padding:14px 18px;
+  background:linear-gradient(180deg,rgba(28,20,12,0.96),rgba(16,12,8,0.97));
+  border:1px solid rgba(201,162,39,0.5);border-radius:14px;
+  box-shadow:0 10px 40px rgba(0,0,0,0.6);color:#f4ead3;
+  font-family:"Segoe UI",system-ui,sans-serif;backdrop-filter:blur(4px);}
+.seated-panel h3{margin:0 0 6px;font-size:15px;letter-spacing:.5px;color:#ffd23f;}
+.seated-panel .sp-bal{font-size:13px;opacity:.95;margin-bottom:8px;}
+.seated-panel .sp-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0;}
+.seated-panel input[type=number]{width:80px;padding:6px 8px;border-radius:8px;
+  border:1px solid #6a5a36;background:#0c0a08;color:#fff;font-size:14px;}
+.seated-panel button{cursor:pointer;border-radius:9px;border:1px solid rgba(201,162,39,0.5);
+  background:#2a2014;color:#f4ead3;padding:7px 12px;font-size:13px;font-weight:700;}
+.seated-panel button:hover{background:#352819;}
+.seated-panel button:disabled{opacity:.45;cursor:default;}
+.seated-panel button.sp-go{background:linear-gradient(135deg,#ffd23f,#e0930f);
+  color:#1a0f00;border:none;font-size:16px;padding:10px 22px;}
+.seated-panel .sp-chip{min-width:62px;text-align:center;}
+.seated-panel .sp-chip.active{outline:3px solid #ffd23f;}
+.seated-panel .sp-chip.red{background:#a01f1f;color:#fff;}
+.seated-panel .sp-chip.black{background:#161616;color:#fff;}
+.seated-panel .sp-chip.green{background:#1f6e4a;color:#fff;}
+.seated-panel .sp-result{min-height:20px;margin:8px 0 4px;font-size:14px;font-weight:700;}
+.seated-panel .sp-result.win{color:#46e08a;}
+.seated-panel .sp-result.lose{color:#ff7b7b;}
+.seated-panel .sp-exit{background:transparent;border:1px solid #6a5a36;font-weight:600;}
+.seated-panel .sp-cards{font-size:13px;opacity:.95;margin:4px 0;min-height:18px;}
+`;
+    (document.head || document.body).appendChild(s);
+  } catch (e) { /* ignore */ }
+}
+
+function spEl(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+// Guarded SFX through dynamic import (audio module may be absent).
+function seatedSfx(name) {
+  try {
+    import('./audio.js').then(m => {
+      const S = (m && (m.SFX || m.default)) || SFX;
+      if (S && typeof S.play === 'function') { try { S.play(name); } catch (e) {} }
+    }).catch(() => { sfx(name); });
+  } catch (e) { sfx(name); }
+}
+
+/**
+ * openSeatedGame(type, config, ctx) where ctx = { prop, onExit }.
+ * Builds a compact bottom-docked control panel and wires each round to the
+ * prop's 3D animation. Falls back gracefully if the prop lacks hooks.
+ */
+export function openSeatedGame(type, config, ctx) {
+  try {
+    closeSeatedGame(); // only one seated panel at a time
+    ensureSeatedStyles();
+    const cfg = mergedConfig(type, config);
+    const prop = ctx && ctx.prop;
+    const ud = (prop && prop.userData) || {};
+    const onExit = (ctx && typeof ctx.onExit === 'function') ? ctx.onExit : function () {};
+
+    const panel = spEl('div', 'seated-panel');
+    const cat = GAME_CATALOG[type] || {};
+    panel.appendChild(spEl('h3', null, `${cat.icon || '🎲'} ${cat.name || type}`));
+    const balEl = spEl('div', 'sp-bal');
+    panel.appendChild(balEl);
+    const setBalance = () => { try { balEl.textContent = `Balance: 🪙 ${fmt(Economy.coins)}`; } catch (e) {} };
+    setBalance();
+
+    const body = spEl('div');
+    panel.appendChild(body);
+
+    const result = spEl('div', 'sp-result');
+
+    const exitRow = spEl('div', 'sp-row');
+    const exitBtn = spEl('button', 'sp-exit', '🚪 Stand Up');
+    exitRow.appendChild(exitBtn);
+
+    _seatedState = { closed: false };
+    const isClosed = () => !_seatedState || _seatedState.closed;
+
+    exitBtn.onclick = () => {
+      try { onExit(); } catch (e) {}
+      closeSeatedGame();
+    };
+
+    // Build the per-game controls.
+    try {
+      switch (type) {
+        case 'slots': buildSeatedSlots(body, result, cfg, ud, setBalance, isClosed); break;
+        case 'roulette': buildSeatedRoulette(body, result, cfg, ud, setBalance, isClosed); break;
+        case 'blackjack': buildSeatedBlackjack(body, result, cfg, ud, setBalance, isClosed); break;
+        case 'poker': buildSeatedPoker(body, result, cfg, ud, setBalance, isClosed); break;
+        default: body.appendChild(spEl('div', 'sp-cards', `No seated UI for "${type}".`));
+      }
+    } catch (e) { /* degrade to just the panel */ }
+
+    panel.appendChild(result);
+    panel.appendChild(exitRow);
+    document.body.appendChild(panel);
+    _seatedPanel = panel;
+  } catch (e) { /* never throw */ }
+}
+
+/** closeSeatedGame() — force-remove the seated panel. */
+export function closeSeatedGame() {
+  try {
+    if (_seatedState) _seatedState.closed = true;
+    if (_seatedPanel && _seatedPanel.parentNode) _seatedPanel.parentNode.removeChild(_seatedPanel);
+  } catch (e) { /* ignore */ }
+  _seatedPanel = null;
+  _seatedState = null;
+}
+
+// ---- Seated SLOTS ---------------------------------------------------------
+function buildSeatedSlots(body, result, cfg, ud, setBalance, isClosed) {
+  const minBet = Math.max(1, cfg.minBet ?? 5);
+  const maxBet = Math.max(minBet, cfg.maxBet ?? 100);
+  const rtp = clamp(cfg.rtp ?? 0.92, 0.5, 0.99);
+  const jackpot = Math.max(0, cfg.jackpot ?? 500);
+
+  // Same weighted paytable model as openSlots.
+  const N = SLOT_SYMBOLS.length, DIAMOND = 5, SEVEN = 4;
+  const WEIGHT = [10, 9, 7, 5, 3, 1.4];
+  const WTOTAL = WEIGHT.reduce((a, b) => a + b, 0);
+  const P = WEIGHT.map(w => w / WTOTAL);
+  const CUM = []; { let acc = 0; for (const w of WEIGHT) { acc += w; CUM.push(acc / WTOTAL); } }
+  const tripleMult = [6, 8, 12, 20, 0, 0];
+  const sevenMult = 40, pairMult = 2.0;
+  function multiplierEV() {
+    let ev = 0;
+    for (let s = 0; s < 4; s++) ev += Math.pow(P[s], 3) * tripleMult[s];
+    ev += Math.pow(P[SEVEN], 3) * sevenMult;
+    for (let s = 0; s < N; s++) ev += 3 * Math.pow(P[s], 2) * (1 - P[s]) * pairMult;
+    return ev;
+  }
+  const multEVraw = multiplierEV();
+  function gFor(bet) {
+    if (bet <= 0 || multEVraw <= 0) return 0;
+    const jackEV = Math.pow(P[DIAMOND], 3) * (jackpot / bet);
+    return Math.max(0, (rtp - jackEV) / multEVraw);
+  }
+  function pickSym() { const r = Math.random(); for (let i = 0; i < N; i++) if (r < CUM[i]) return i; return N - 1; }
+  function readBet(inp) { let v = parseInt(inp.value, 10); if (!Number.isFinite(v)) v = minBet; v = Math.round(clamp(v, minBet, maxBet)); inp.value = String(v); return v; }
+
+  const row = spEl('div', 'sp-row');
+  row.appendChild(spEl('span', null, 'Bet'));
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.min = String(minBet); inp.max = String(maxBet); inp.value = String(minBet);
+  row.appendChild(inp);
+  row.appendChild(spEl('span', null, `(${minBet}–${maxBet})`));
+  const spinBtn = spEl('button', 'sp-go', 'SPIN');
+  row.appendChild(spinBtn);
+  body.appendChild(row);
+
+  let busy = false;
+  if (typeof ud.setSymbols === 'function') { try { ud.setSymbols([0, 0, 0]); } catch (e) {} }
+
+  spinBtn.onclick = () => {
+    if (busy || isClosed()) return;
+    const bet = readBet(inp);
+    if (!Economy.canAfford(bet)) { result.className = 'sp-result lose'; result.textContent = 'Not enough coins.'; return; }
+    busy = true; spinBtn.disabled = true; inp.disabled = true;
+    result.className = 'sp-result'; result.textContent = 'Spinning…';
+    seatedSfx('spin');
+    const final = [pickSym(), pickSym(), pickSym()];
+    const settle = () => {
+      if (isClosed()) return;
+      const [a, b, c] = final;
+      const g = gFor(bet);
+      let payout = 0, msg = 'No win — try again!', win = false;
+      if (a === b && b === c) {
+        if (a === DIAMOND) { payout = jackpot; msg = `JACKPOT!! 💎💎💎  +${fmt(jackpot)}`; }
+        else if (a === SEVEN) { payout = Math.max(bet, Math.round(bet * sevenMult * g)); msg = `Three 7️⃣!  +${fmt(payout)}`; }
+        else { payout = Math.max(bet, Math.round(bet * (tripleMult[a] || 2) * g)); msg = `Three ${SLOT_SYMBOLS[a]}!  +${fmt(payout)}`; }
+        win = true;
+      } else if (a === b || b === c || a === c) {
+        payout = Math.round(bet * pairMult * g);
+        if (payout > 0) { msg = `Pair!  +${fmt(payout)}`; win = true; } else payout = 0;
+      }
+      Economy.wager(bet, payout);
+      setBalance();
+      result.className = 'sp-result ' + (win ? 'win' : 'lose');
+      result.textContent = msg;
+      if (!win) seatedSfx('lose');
+      else if (a === DIAMOND && b === c) seatedSfx('jackpot');
+      else if (payout >= bet * 8) seatedSfx('bigwin');
+      else seatedSfx('win');
+      busy = false; spinBtn.disabled = false; inp.disabled = false;
+    };
+    if (typeof ud.spin === 'function') {
+      let done = false;
+      const cb = () => { if (done) return; done = true; settle(); };
+      try { ud.spin(final, cb); } catch (e) { settle(); }
+      // Safety: settle even if the animation never calls back.
+      setTimeout(() => cb(), 4000);
+    } else { setTimeout(settle, 600); }
+  };
+}
+
+// ---- Seated ROULETTE ------------------------------------------------------
+function buildSeatedRoulette(body, result, cfg, ud, setBalance, isClosed) {
+  const minBet = Math.max(1, cfg.minBet ?? 5);
+  const maxBet = Math.max(minBet, cfg.maxBet ?? 200);
+  const colorPays = Math.max(1, cfg.colorPays ?? 2);
+  const greenPays = Math.max(1, cfg.greenPays ?? 14);
+  function readBet(inp) { let v = parseInt(inp.value, 10); if (!Number.isFinite(v)) v = minBet; v = Math.round(clamp(v, minBet, maxBet)); inp.value = String(v); return v; }
+
+  let pick = 'red';
+  const chipRow = spEl('div', 'sp-row');
+  const defs = [{ id: 'red', label: 'RED' }, { id: 'black', label: 'BLACK' }, { id: 'green', label: 'GREEN 0' }];
+  const chips = {};
+  defs.forEach(d => {
+    const ch = spEl('button', `sp-chip ${d.id}` + (d.id === pick ? ' active' : ''), d.label);
+    ch.onclick = () => { pick = d.id; Object.values(chips).forEach(c => c.classList.remove('active')); ch.classList.add('active'); };
+    chips[d.id] = ch; chipRow.appendChild(ch);
+  });
+  body.appendChild(chipRow);
+
+  const row = spEl('div', 'sp-row');
+  row.appendChild(spEl('span', null, 'Bet'));
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.min = String(minBet); inp.max = String(maxBet); inp.value = String(minBet);
+  row.appendChild(inp);
+  const spinBtn = spEl('button', 'sp-go', 'SPIN');
+  row.appendChild(spinBtn);
+  body.appendChild(row);
+
+  let busy = false;
+  spinBtn.onclick = () => {
+    if (busy || isClosed()) return;
+    const bet = readBet(inp);
+    if (!Economy.canAfford(bet)) { result.className = 'sp-result lose'; result.textContent = 'Not enough coins.'; return; }
+    busy = true; spinBtn.disabled = true; inp.disabled = true;
+    Object.values(chips).forEach(c => { c.disabled = true; });
+    result.className = 'sp-result'; result.textContent = 'Spinning…';
+    seatedSfx('spin');
+    const number = (Math.random() * 37) | 0;
+    const color = rouletteColor(number);
+    const settle = () => {
+      if (isClosed()) return;
+      let payout = 0;
+      if (pick === color) payout = (color === 'green') ? Math.round(bet * greenPays) : Math.round(bet * colorPays);
+      Economy.wager(bet, payout);
+      setBalance();
+      const won = payout > 0;
+      result.className = 'sp-result ' + (won ? 'win' : 'lose');
+      result.textContent = won
+        ? `${number} ${color.toUpperCase()} — you win! +${fmt(payout)}`
+        : `${number} ${color.toUpperCase()} — you lose ${fmt(bet)}`;
+      seatedSfx(won ? (payout >= bet * 8 ? 'bigwin' : 'win') : 'lose');
+      busy = false; spinBtn.disabled = false; inp.disabled = false;
+      Object.values(chips).forEach(c => { c.disabled = false; });
+    };
+    if (typeof ud.spinWheel === 'function') {
+      let done = false;
+      const cb = () => { if (done) return; done = true; settle(); };
+      try { ud.spinWheel(number, cb); } catch (e) { settle(); }
+      setTimeout(() => cb(), 5000);
+    } else { setTimeout(settle, 800); }
+  };
+}
+
+// ---- Seated BLACKJACK -----------------------------------------------------
+function buildSeatedBlackjack(body, result, cfg, ud, setBalance, isClosed) {
+  const minBet = Math.max(1, cfg.minBet ?? 10);
+  const maxBet = Math.max(minBet, cfg.maxBet ?? 300);
+  const bjPays = Math.max(1, cfg.blackjackPays ?? 1.5);
+  const standsOn = Math.max(16, cfg.dealerStandsOn ?? 17);
+  function readBet(inp) { let v = parseInt(inp.value, 10); if (!Number.isFinite(v)) v = minBet; v = Math.round(clamp(v, minBet, maxBet)); inp.value = String(v); return v; }
+
+  const info = spEl('div', 'sp-cards', `Dealer stands on ${standsOn}`);
+  body.appendChild(info);
+
+  const row = spEl('div', 'sp-row');
+  row.appendChild(spEl('span', null, 'Bet'));
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.min = String(minBet); inp.max = String(maxBet); inp.value = String(minBet);
+  row.appendChild(inp);
+  const dealBtn = spEl('button', 'sp-go', 'DEAL');
+  const hitBtn = spEl('button', null, 'Hit');
+  const standBtn = spEl('button', null, 'Stand');
+  row.appendChild(dealBtn); row.appendChild(hitBtn); row.appendChild(standBtn);
+  body.appendChild(row);
+
+  let deck = [], player = [], dealer = [], bet = 0, inRound = false, animating = false;
+
+  function setControls(playing) {
+    inRound = playing;
+    dealBtn.disabled = playing || animating;
+    hitBtn.disabled = !playing || animating;
+    standBtn.disabled = !playing || animating;
+    inp.disabled = playing || animating;
+  }
+  setControls(false);
+
+  function showHands(reveal) {
+    const dTxt = reveal ? `${handValue(dealer)}` : '?';
+    info.textContent = `Dealer: ${dealer.map((c, i) => (!reveal && i === 1) ? '🂠' : c.rank + c.suit).join(' ')} (${dTxt})  •  You: ${player.map(c => c.rank + c.suit).join(' ')} (${handValue(player)})`;
+  }
+
+  // Animate dealing a single card, then continue.
+  function animDeal(to, card, next) {
+    animating = true;
+    setControls(inRound);
+    const label = card.rank + card.suit;
+    let done = false;
+    const cb = () => { if (done) return; done = true; animating = false; setControls(inRound); if (typeof next === 'function') next(); };
+    if (typeof ud.dealCard === 'function') {
+      try { ud.dealCard({ to, label }, cb); } catch (e) { cb(); }
+      setTimeout(() => cb(), 1200);
+    } else { seatedSfx('card'); setTimeout(cb, 120); }
+  }
+
+  function deal() {
+    if (inRound || animating || isClosed()) return;
+    bet = readBet(inp);
+    if (!Economy.canAfford(bet)) { result.className = 'sp-result lose'; result.textContent = 'Not enough coins.'; return; }
+    if (typeof ud.clearCards === 'function') { try { ud.clearCards(); } catch (e) {} }
+    deck = freshDeck();
+    player = [deck.pop(), deck.pop()];
+    dealer = [deck.pop(), deck.pop()];
+    result.className = 'sp-result'; result.textContent = '';
+    setControls(true);
+    seatedSfx('chip');
+    // Deal the four cards in sequence, then reveal / check naturals.
+    animDeal('player', player[0], () => animDeal('dealer', dealer[0], () => animDeal('player', player[1], () => animDeal('dealer', dealer[1], () => {
+      showHands(false);
+      if (isBlackjack(player) || isBlackjack(dealer)) finishRound();
+    }))));
+  }
+
+  function hit() {
+    if (!inRound || animating) return;
+    const card = deck.pop();
+    player.push(card);
+    animDeal('player', card, () => {
+      showHands(false);
+      if (handValue(player) > 21) finishRound();
+    });
+  }
+
+  function stand() {
+    if (!inRound || animating) return;
+    drawDealer(() => finishRound());
+  }
+
+  // Sequentially animate dealer draws to standsOn.
+  function drawDealer(after) {
+    if (handValue(dealer) < standsOn && deck.length) {
+      const card = deck.pop();
+      dealer.push(card);
+      animDeal('dealer', card, () => drawDealer(after));
+    } else if (typeof after === 'function') after();
+  }
+
+  function finishRound() {
+    const pv = handValue(player);
+    const pBJ = isBlackjack(player), dBJ = isBlackjack(dealer);
+    const settle = () => {
+      const dv = handValue(dealer);
+      showHands(true);
+      let payout = 0, msg = '', cls = 'lose';
+      if (pv > 21) { payout = 0; msg = `Bust! You lose ${fmt(bet)}.`; }
+      else if (pBJ && !dBJ) { payout = Math.round(bet + bet * bjPays); msg = `Blackjack! +${fmt(payout - bet)}`; cls = 'win'; }
+      else if (dBJ && !pBJ) { payout = 0; msg = `Dealer blackjack. You lose ${fmt(bet)}.`; }
+      else if (pBJ && dBJ) { payout = bet; msg = 'Push — both blackjack.'; cls = ''; }
+      else if (dv > 21) { payout = bet * 2; msg = `Dealer busts! +${fmt(bet)}`; cls = 'win'; }
+      else if (pv > dv) { payout = bet * 2; msg = `You win ${pv} vs ${dv}! +${fmt(bet)}`; cls = 'win'; }
+      else if (pv < dv) { payout = 0; msg = `Dealer wins ${dv} vs ${pv}.`; }
+      else { payout = bet; msg = `Push — ${pv} each.`; cls = ''; }
+      Economy.wager(bet, payout);
+      setBalance();
+      result.className = 'sp-result ' + cls;
+      result.textContent = msg;
+      setControls(false);
+      if (cls === 'win') seatedSfx(pBJ ? 'bigwin' : 'win');
+      else if (cls === 'lose') seatedSfx('lose');
+      else seatedSfx('chip');
+    };
+    // If the player can still be beaten, let the dealer finish drawing first.
+    if (pv <= 21 && !pBJ && !dBJ) { drawDealer(settle); } else settle();
+  }
+
+  dealBtn.onclick = deal;
+  hitBtn.onclick = hit;
+  standBtn.onclick = stand;
+}
+
+// ---- Seated POKER ---------------------------------------------------------
+function buildSeatedPoker(body, result, cfg, ud, setBalance, isClosed) {
+  const ante = Math.max(1, cfg.ante ?? 10);
+  const pairPays = Math.max(0, cfg.pairPays ?? 1);
+  const flushPays = Math.max(1, cfg.flushPays ?? 6);
+  const straightPays = Math.max(1, cfg.straightPays ?? 4);
+  const pays = {
+    pair: pairPays, lowpair: 0,
+    twoPair: Math.max(pairPays + 1, 2),
+    trips: Math.max(straightPays - 1, 3),
+    straight: straightPays, flush: flushPays,
+    fullHouse: Math.max(flushPays + 3, 9),
+    quads: Math.max(flushPays + 19, 25),
+    straightFlush: Math.max(flushPays + 44, 50),
+    high: 0,
+  };
+
+  const handEl = spEl('div', 'sp-cards', `5-Card Draw · Ante ${ante} · Jacks-or-better pays`);
+  body.appendChild(handEl);
+
+  const holdRow = spEl('div', 'sp-row');
+  body.appendChild(holdRow);
+
+  const row = spEl('div', 'sp-row');
+  const dealBtn = spEl('button', 'sp-go', `DEAL (ante ${ante})`);
+  const drawBtn = spEl('button', null, 'DRAW');
+  row.appendChild(dealBtn); row.appendChild(drawBtn);
+  body.appendChild(row);
+
+  let deck = [], hand = [], held = [false, false, false, false, false], phase = 'idle', animating = false;
+
+  function renderHold() {
+    holdRow.innerHTML = '';
+    hand.forEach((c, i) => {
+      const hb = spEl('button', 'sp-chip', held[i] ? '✓ ' + c.rank + c.suit : c.rank + c.suit);
+      if (held[i]) hb.classList.add('active');
+      hb.disabled = phase !== 'dealt' || animating;
+      hb.onclick = () => { if (phase !== 'dealt') return; held[i] = !held[i]; renderHold(); };
+      holdRow.appendChild(hb);
+    });
+    handEl.textContent = hand.length ? `Hand: ${hand.map(c => c.rank + c.suit).join(' ')}` : `5-Card Draw · Ante ${ante}`;
+  }
+
+  // Animate dealing the five cards in sequence to the player.
+  function dealSequence(cards, next) {
+    animating = true;
+    let i = 0;
+    const step = () => {
+      if (i >= cards.length) { animating = false; if (typeof next === 'function') next(); return; }
+      const card = cards[i++];
+      let done = false;
+      const cb = () => { if (done) return; done = true; step(); };
+      if (typeof ud.dealCard === 'function') {
+        try { ud.dealCard({ to: 'player', label: card.rank + card.suit }, cb); } catch (e) { cb(); }
+        setTimeout(() => cb(), 1000);
+      } else { seatedSfx('card'); setTimeout(cb, 100); }
+    };
+    step();
+  }
+
+  function deal() {
+    if (phase === 'dealt' || animating || isClosed()) return;
+    if (!Economy.canAfford(ante)) { result.className = 'sp-result lose'; result.textContent = 'Not enough coins for the ante.'; return; }
+    if (typeof ud.clearCards === 'function') { try { ud.clearCards(); } catch (e) {} }
+    deck = freshDeck();
+    hand = [deck.pop(), deck.pop(), deck.pop(), deck.pop(), deck.pop()];
+    held = [false, false, false, false, false];
+    phase = 'dealt';
+    result.className = 'sp-result'; result.textContent = 'Pick cards to HOLD, then DRAW.';
+    dealBtn.disabled = true; drawBtn.disabled = true;
+    seatedSfx('chip');
+    dealSequence(hand, () => { drawBtn.disabled = false; renderHold(); });
+    renderHold();
+  }
+
+  function draw() {
+    if (phase !== 'dealt' || animating) return;
+    const replacements = [];
+    for (let i = 0; i < 5; i++) { if (!held[i] && deck.length) { hand[i] = deck.pop(); replacements.push(hand[i]); } }
+    phase = 'done';
+    drawBtn.disabled = true;
+    const finish = () => {
+      renderHold();
+      const res = evalPoker(hand);
+      const mult = pays[res.key] ?? 0;
+      let payout = 0;
+      if (mult > 0) payout = Math.round(ante * mult);
+      const net = payout - ante;
+      const cls = net > 0 ? 'win' : (payout > 0 ? '' : 'lose');
+      Economy.wager(ante, payout);
+      setBalance();
+      result.className = 'sp-result ' + cls;
+      result.textContent = net > 0 ? `${res.name}! +${fmt(net)} (×${mult})`
+        : (payout > 0 ? `${res.name} — push (ante returned).` : `${res.name} — no win. Lost ${fmt(ante)}.`);
+      if (cls === 'win') seatedSfx(mult >= 9 ? 'bigwin' : 'win');
+      else if (cls === 'lose') seatedSfx('lose');
+      else seatedSfx('chip');
+      dealBtn.disabled = false;
+      phase = 'idle';
+    };
+    if (replacements.length) dealSequence(replacements, finish); else finish();
+  }
+
+  dealBtn.onclick = deal;
+  drawBtn.onclick = draw;
+  drawBtn.disabled = true;
+  renderHold();
 }
 
 // =============================================================
