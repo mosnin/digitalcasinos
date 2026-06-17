@@ -26,7 +26,7 @@ import * as games from './games.js';
 import * as decor from './decor.js';
 
 // ---- small shared constants ------------------------------------
-const GRID_Y    = 0.02;   // grid lines just above the floor (y=0)
+const GRID_Y    = 0.02;   // grid border quads just above the floor (y=0)
 const TINT_Y    = 0.015;  // owned tint quad
 const HILITE_Y  = 0.03;   // moving highlight quad (above tint)
 const HALF       = FLOOR.TILE / 2;
@@ -36,10 +36,19 @@ const GAME_COLLIDER_H = 2.0;
 const COL_OWNED   = 0x35e06a; // green
 const COL_BUYABLE = 0xffd23f; // gold
 const COL_BLOCKED = 0xff3b3b; // red
+const COL_VALID   = 0x35e06a; // ghost: valid placement
+const COL_INVALID = 0xff3b3b; // ghost: invalid / occupied
+
+const BORDER_W    = 0.12;  // width of a glowing tile border band
+const POST_Y      = 0.9;   // height of owned-plot corner posts
+const LABEL_CAP   = 2;     // max FOR-SALE billboards rendered near player
 
 // shared unit-quad geometry (XZ plane, 1×1, centred on origin)
 const QUAD_GEO = new THREE.PlaneGeometry(1, 1);
 QUAD_GEO.rotateX(-Math.PI / 2); // lie flat on the floor
+
+// shared small box geo for corner posts (scaled per-instance via matrix)
+const POST_GEO = new THREE.BoxGeometry(1, 1, 1);
 
 // ---------------------------------------------------------------
 // Helpers (defensive — never throw)
@@ -48,28 +57,117 @@ function safe(fn, fallback) {
   try { return fn(); } catch (e) { return fallback; }
 }
 
+// Smoothly approach a target (frame-rate independent-ish lerp).
+function damp(cur, target, lambda, dt) {
+  const t = 1 - Math.exp(-Math.max(0, lambda) * Math.max(0, dt || 0));
+  return cur + (target - cur) * t;
+}
+
+// ---------------------------------------------------------------
+// Canvas-based sprite labels (cached by text). Sprites always face
+// the camera and are cheap. Returns null on any failure.
+// ---------------------------------------------------------------
+const _labelTexCache = new Map(); // text -> THREE.CanvasTexture
+function labelTexture(text, opts) {
+  opts = opts || {};
+  const cacheKey = `${text}|${opts.bg || ''}|${opts.fg || ''}`;
+  if (_labelTexCache.has(cacheKey)) return _labelTexCache.get(cacheKey);
+  const tex = safe(() => {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    const W = 512, H = 128;
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.clearRect(0, 0, W, H);
+    // rounded panel background
+    const bg = opts.bg || 'rgba(10,12,20,0.78)';
+    const fg = opts.fg || '#ffd23f';
+    const r = 26;
+    ctx.fillStyle = bg;
+    ctx.strokeStyle = fg;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(r, 8);
+    ctx.lineTo(W - r, 8);
+    ctx.quadraticCurveTo(W - 8, 8, W - 8, 8 + r);
+    ctx.lineTo(W - 8, H - 8 - r);
+    ctx.quadraticCurveTo(W - 8, H - 8, W - r, H - 8);
+    ctx.lineTo(r, H - 8);
+    ctx.quadraticCurveTo(8, H - 8, 8, H - 8 - r);
+    ctx.lineTo(8, 8 + r);
+    ctx.quadraticCurveTo(8, 8, r, 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // text
+    ctx.fillStyle = fg;
+    ctx.font = 'bold 56px system-ui, Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = fg;
+    ctx.shadowBlur = 16;
+    ctx.fillText(String(text), W / 2, H / 2 + 4);
+    const t = new THREE.CanvasTexture(canvas);
+    t.anisotropy = 4;
+    if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+    t.needsUpdate = true;
+    return t;
+  }, null);
+  _labelTexCache.set(cacheKey, tex || null);
+  return tex || null;
+}
+
+function makeLabelSprite(text, opts) {
+  const tex = labelTexture(text, opts);
+  if (!tex) return null;
+  return safe(() => {
+    const mat = new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthTest: true, depthWrite: false,
+    });
+    const s = new THREE.Sprite(mat);
+    s.scale.set(2.6, 0.65, 1);
+    return s;
+  }, null);
+}
+
 // Catalog look-ups that tolerate unknown ids.
 function gameDef(type) { return (type && GAME_CATALOG[type]) || null; }
 function decorDef(id)  { return (id && DECOR_CATALOG[id]) || null; }
 
 // Make a material transparent + non-collidable for ghost previews.
+// Tints every material's emissive so the whole ghost can flash green
+// (valid) or red (invalid). Returns the list of cloned materials so the
+// caller can re-tint them cheaply each frame.
 function makeGhost(node) {
+  const mats = [];
   node.traverse((o) => {
     if (!o.isMesh) return;
     o.castShadow = false;
     o.receiveShadow = false;
-    const mats = Array.isArray(o.material) ? o.material : [o.material];
-    o.material = mats.map((m) => {
+    const src = Array.isArray(o.material) ? o.material : [o.material];
+    const cloned = src.map((m) => {
       if (!m) return m;
       const c = m.clone();
       c.transparent = true;
-      c.opacity = 0.45;
+      c.opacity = 0.5;
       c.depthWrite = false;
+      if (c.emissive) { c.emissive = c.emissive.clone(); }
+      mats.push(c);
       return c;
     });
-    if (!Array.isArray(o.material)) o.material = o.material[0];
+    o.material = Array.isArray(o.material) ? cloned : cloned[0];
   });
-  return node;
+  return mats;
+}
+
+// Tint a list of ghost materials toward a validity colour.
+function tintGhost(mats, hex) {
+  for (const m of mats) {
+    if (!m) continue;
+    if (m.emissive) { safe(() => m.emissive.setHex(hex)); if ('emissiveIntensity' in m) m.emissiveIntensity = 0.6; }
+    else if (m.color) { safe(() => m.color.setHex(hex)); }
+  }
 }
 
 // ---------------------------------------------------------------
@@ -95,47 +193,60 @@ export function attachParcels(stage, economy, hooks) {
   let currentTile = null;
 
   // -----------------------------------------------------------------
-  // 1) Grid overlay on buildable tiles (single LineSegments, merged)
+  // 1) Glowing tile borders on buildable tiles.
+  // Built from four thin quads per tile, merged into one BufferGeometry
+  // so the whole grid is a single additive-blended draw call. A subtle
+  // pulse is driven from update() via borderMat.opacity.
   // -----------------------------------------------------------------
+  const borderMat = new THREE.MeshBasicMaterial({
+    color: COL_BUYABLE, transparent: true, opacity: 0.32,
+    depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+  });
+  let borderBasis = 0.32; // base opacity the pulse oscillates around
   buildGrid();
   function buildGrid() {
     const positions = [];
-    const TX = FLOOR.TX, TZ = FLOOR.TZ, T = FLOOR.TILE;
+    const TX = FLOOR.TX, TZ = FLOOR.TZ;
+    const w = BORDER_W;
+    // push a flat band rectangle as two triangles (CCW, y=GRID_Y)
+    const band = (ax, az, bx, bz) => {
+      positions.push(ax, GRID_Y, az,  bx, GRID_Y, az,  bx, GRID_Y, bz);
+      positions.push(ax, GRID_Y, az,  bx, GRID_Y, bz,  ax, GRID_Y, bz);
+    };
     for (let ti = 0; ti < TX; ti++) {
       for (let tj = 0; tj < TZ; tj++) {
         if (!safe(() => isBuildableTile(floor, ti, tj), false)) continue;
         const c = tileCenter(ti, tj);
         const x0 = c.x - HALF, x1 = c.x + HALF;
         const z0 = c.z - HALF, z1 = c.z + HALF;
-        // four edges of the tile (slightly above floor)
-        // top
-        positions.push(x0, GRID_Y, z0, x1, GRID_Y, z0);
-        // bottom
-        positions.push(x0, GRID_Y, z1, x1, GRID_Y, z1);
-        // left
-        positions.push(x0, GRID_Y, z0, x0, GRID_Y, z1);
-        // right
-        positions.push(x1, GRID_Y, z0, x1, GRID_Y, z1);
+        band(x0, z0, x1, z0 + w);          // top edge
+        band(x0, z1 - w, x1, z1);          // bottom edge
+        band(x0, z0, x0 + w, z1);          // left edge
+        band(x1 - w, z0, x1, z1);          // right edge
       }
     }
     if (!positions.length) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 0.12,
-    });
-    const lines = new THREE.LineSegments(geo, mat);
-    lines.name = 'parcelGrid';
-    lines.renderOrder = 1;
-    root.add(lines);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, borderMat);
+    mesh.name = 'parcelGrid';
+    mesh.renderOrder = 1;
+    root.add(mesh);
   }
 
   // -----------------------------------------------------------------
   // 2a) Owned tint quads (one reusable material, one quad per owned tile)
   // -----------------------------------------------------------------
   const tintMat = new THREE.MeshBasicMaterial({
-    color: COL_OWNED, transparent: true, opacity: 0.18,
+    color: COL_OWNED, transparent: true, opacity: 0.12,
     depthWrite: false, side: THREE.DoubleSide,
+  });
+  // shared glowing post material (additive so it reads as a marker glow)
+  const postMat = new THREE.MeshBasicMaterial({
+    color: COL_OWNED, transparent: true, opacity: 0.85,
+    depthWrite: false, blending: THREE.AdditiveBlending,
   });
   const tintGroup = new THREE.Group();
   tintGroup.name = 'ownedTints';
@@ -146,10 +257,21 @@ export function attachParcels(stage, economy, hooks) {
     if (tintQuads.has(key)) return;
     const c = tileCenter(ti, tj);
     const q = new THREE.Mesh(QUAD_GEO, tintMat);
-    q.scale.set(FLOOR.TILE * 0.96, 1, FLOOR.TILE * 0.96);
+    q.scale.set(FLOOR.TILE * 0.92, 1, FLOOR.TILE * 0.92);
     q.position.set(c.x, TINT_Y, c.z);
     q.renderOrder = 2;
     tintGroup.add(q);
+    // small glowing corner posts at the four tile corners
+    const inset = HALF - 0.35;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const post = new THREE.Mesh(POST_GEO, postMat);
+        post.scale.set(0.18, POST_Y, 0.18);
+        post.position.set(c.x + sx * inset, POST_Y / 2, c.z + sz * inset);
+        post.renderOrder = 2;
+        tintGroup.add(post);
+      }
+    }
     tintQuads.set(key, q);
   }
 
@@ -167,6 +289,74 @@ export function attachParcels(stage, economy, hooks) {
   hilite.renderOrder = 3;
   hilite.visible = false;
   root.add(hilite);
+  // smoothed target the highlight lerps toward
+  const hiliteTarget = new THREE.Vector3(0, HILITE_Y, 0);
+
+  // -----------------------------------------------------------------
+  // 2c) "FOR SALE — price 🪙" billboards. To stay cheap we keep a small
+  // pool (LABEL_CAP sprites) and reposition them over the nearest
+  // unowned buildable tiles each update, instead of one per tile.
+  // -----------------------------------------------------------------
+  const saleGroup = new THREE.Group();
+  saleGroup.name = 'forSaleLabels';
+  root.add(saleGroup);
+  const salePool = [];
+  (function buildSalePool() {
+    const price = safe(() => economy.parcelPrice(floor), 0);
+    const sprite = makeLabelSprite(`FOR SALE — ${price} 🪙`, {
+      fg: '#ffd23f', bg: 'rgba(20,14,4,0.82)',
+    });
+    if (!sprite) return; // no DOM (headless) — just skip billboards
+    sprite.visible = false;
+    sprite.renderOrder = 5;
+    saleGroup.add(sprite);
+    salePool.push(sprite);
+    for (let i = 1; i < LABEL_CAP; i++) {
+      const clone = sprite.clone();
+      clone.material = sprite.material; // share the cached material
+      clone.visible = false;
+      clone.renderOrder = 5;
+      saleGroup.add(clone);
+      salePool.push(clone);
+    }
+  })();
+
+  // Reposition the FOR-SALE pool over the closest unowned buildable
+  // tiles within a small radius of the player.
+  const _saleScan = []; // reused scratch array { d, x, z }
+  function updateSaleLabels(px, pz) {
+    if (!salePool.length) return;
+    _saleScan.length = 0;
+    const R2 = 18 * 18; // only consider tiles within ~18m
+    const tc = safe(() => tileFromWorld(px, pz), null);
+    const ci = tc ? tc.ti : 0, cj = tc ? tc.tj : 0;
+    const span = 4; // search a small neighbourhood of tiles
+    for (let di = -span; di <= span; di++) {
+      for (let dj = -span; dj <= span; dj++) {
+        const ti = ci + di, tj = cj + dj;
+        if (ti < 0 || tj < 0 || ti >= FLOOR.TX || tj >= FLOOR.TZ) continue;
+        if (!safe(() => isBuildableTile(floor, ti, tj), false)) continue;
+        const key = parcelKey(floor, ti, tj);
+        if (safe(() => economy.ownsParcel(key), false)) continue;
+        const c = tileCenter(ti, tj);
+        const dx = c.x - px, dz = c.z - pz;
+        const d = dx * dx + dz * dz;
+        if (d > R2) continue;
+        _saleScan.push({ d, x: c.x, z: c.z });
+      }
+    }
+    _saleScan.sort((a, b) => a.d - b.d);
+    for (let i = 0; i < salePool.length; i++) {
+      const s = salePool[i];
+      const t = _saleScan[i];
+      if (t) {
+        s.position.set(t.x, 2.1, t.z);
+        s.visible = true;
+      } else {
+        s.visible = false;
+      }
+    }
+  }
 
   // -----------------------------------------------------------------
   // Prop spawning
@@ -228,6 +418,16 @@ export function attachParcels(stage, economy, hooks) {
     applyRot(node, g.rot);
     node.userData.parcel = { key, index, kind: 'game', type: g.type };
     root.add(node);
+    // floating nameplate above the placed game
+    const def = gameDef(g.type);
+    const labelText = (def && def.name) || 'YOUR PARCEL';
+    const plate = makeLabelSprite(labelText, { fg: '#35e06a', bg: 'rgba(8,16,12,0.8)' });
+    if (plate) {
+      plate.position.set(node.position.x, 2.7, node.position.z);
+      plate.renderOrder = 5;
+      root.add(plate);
+      node.userData.nameplate = plate;
+    }
     registry.set(node, { key, index, kind: 'game', type: g.type });
     addGameCollider(node);
     spawned.add(tag);
@@ -279,15 +479,19 @@ export function attachParcels(stage, economy, hooks) {
   // -----------------------------------------------------------------
   // Build mode + ghost preview
   // -----------------------------------------------------------------
-  let pending = null;   // { kind:'game'|'decor', type }
-  let ghost = null;     // Object3D
-  let ghostRot = 0;     // radians
+  let pending = null;     // { kind:'game'|'decor', type }
+  let ghost = null;       // Object3D
+  let ghostMats = [];     // cloned materials we re-tint each frame
+  let ghostValidNow = null; // last tint state (true/false) to avoid churn
+  let ghostRot = 0;       // radians
 
   function clearGhost() {
     if (ghost) {
       root.remove(ghost);
       ghost = null;
     }
+    ghostMats = [];
+    ghostValidNow = null;
   }
 
   function buildGhost() {
@@ -297,12 +501,21 @@ export function attachParcels(stage, economy, hooks) {
       ? safe(() => games.createGameProp(pending.type), null)
       : safe(() => decor.createDecorProp(pending.type), null);
     if (!node) return;
-    makeGhost(node);
+    ghostMats = makeGhost(node) || [];
     node.rotation.y = ghostRot;
     node.renderOrder = 4;
     ghost = node;
     root.add(ghost);
     positionGhost();
+  }
+
+  // Is the tile under the player a legal spot for the pending item?
+  function ghostValidAt(tile) {
+    if (!tile || !pending) return false;
+    const key = parcelKey(floor, tile.ti, tile.tj);
+    if (!safe(() => economy.ownsParcel(key), false)) return false;
+    if (pending.kind === 'game' && gamesOnTile(key, tile.ti, tile.tj).length > 0) return false;
+    return true;
   }
 
   function positionGhost() {
@@ -311,6 +524,11 @@ export function attachParcels(stage, economy, hooks) {
       const c = tileCenter(currentTile.ti, currentTile.tj);
       ghost.position.set(c.x, 0, c.z);
       ghost.visible = true;
+      const valid = ghostValidAt(currentTile);
+      if (valid !== ghostValidNow) {
+        ghostValidNow = valid;
+        tintGhost(ghostMats, valid ? COL_VALID : COL_INVALID);
+      }
     } else {
       ghost.visible = false;
     }
@@ -337,7 +555,13 @@ export function attachParcels(stage, economy, hooks) {
   // -----------------------------------------------------------------
   // api.update(dt, playerPos) — move highlight to tile under player
   // -----------------------------------------------------------------
-  function update(_dt, playerPos) {
+  let _pulseT = 0;
+  function update(dt, playerPos) {
+    const d = Number.isFinite(dt) ? dt : 0.016;
+    // subtle border glow pulse (cheap: one material opacity write)
+    _pulseT += d;
+    borderMat.opacity = borderBasis + 0.12 * Math.sin(_pulseT * 2.2);
+
     if (!playerPos) return;
     const px = playerPos.x, pz = playerPos.z;
     const t = safe(() => tileFromWorld(px, pz), null);
@@ -347,7 +571,14 @@ export function attachParcels(stage, economy, hooks) {
       hilite.visible = false;
     } else {
       const c = tileCenter(t.ti, t.tj);
-      hilite.position.set(c.x, HILITE_Y, c.z);
+      hiliteTarget.set(c.x, HILITE_Y, c.z);
+      // smoothly lerp the highlight toward the target tile centre
+      if (!hilite.visible) hilite.position.copy(hiliteTarget);
+      else {
+        hilite.position.x = damp(hilite.position.x, hiliteTarget.x, 14, d);
+        hilite.position.z = damp(hilite.position.z, hiliteTarget.z, 14, d);
+        hilite.position.y = HILITE_Y;
+      }
       hilite.visible = true;
       const key = parcelKey(floor, t.ti, t.tj);
       const owned = safe(() => economy.ownsParcel(key), false);
@@ -357,6 +588,7 @@ export function attachParcels(stage, economy, hooks) {
       else if (buildable) col = COL_BUYABLE;
       hiliteMat.color.setHex(col);
     }
+    safe(() => updateSaleLabels(px, pz));
     positionGhost();
   }
 
@@ -472,6 +704,8 @@ export function attachParcels(stage, economy, hooks) {
 
   function despawnNode(node) {
     removeCollider(node);
+    const plate = node.userData && node.userData.nameplate;
+    if (plate) { root.remove(plate); safe(() => plate.material && plate.material.dispose()); }
     root.remove(node);
     const meta = registry.get(node);
     if (meta) spawned.delete(spawnTag(meta.kind, meta.key, meta.index));

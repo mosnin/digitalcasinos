@@ -91,9 +91,35 @@ const probe3 = await page.evaluate(() => {
 await page.screenshot({ path: '/tmp/shot_placed.png' });
 
 // switch to floor 1 (pool)
-await page.evaluate(() => window.DigitalCasinos.switchFloor(1));
+await page.evaluate(() => { const D = window.DigitalCasinos; D.goToDest(D.DESTINATIONS.find(d => d.id === 'casino1')); });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: '/tmp/shot_floor1.png' });
+
+// travel to a HOTEL floor, buy a room, enter it
+const probe4 = await page.evaluate(async () => {
+  const D = window.DigitalCasinos;
+  D.goToDest(D.DESTINATIONS.find(d => d.kind === 'hotel'));
+  await new Promise(r => setTimeout(r, 600));
+  // buy first room on this hotel floor
+  const cfg = await import('./js/config.js');
+  const hallId = cfg.HOTEL.FLOORS[0].id;
+  const slot = cfg.hotelDoorSlots(hallId)[0];
+  const style = cfg.HOTEL.FLOORS[0].style;
+  const buy = D.Economy.buyRoom(slot.roomId, style, cfg.ROOM_STYLES[style].cost);
+  D.enterRoom(slot.roomId, style, D.DESTINATIONS.find(d => d.kind === 'hotel'));
+  await new Promise(r => setTimeout(r, 600));
+  return { hotelRoom: slot.roomId, buy, rooms: D.Economy.ownedRoomIds().length };
+});
+await page.screenshot({ path: '/tmp/shot_room.png' });
+
+// travel to the arena, then the garden
+await page.evaluate(() => { const D = window.DigitalCasinos; D.goToDest(D.DESTINATIONS.find(d => d.kind === 'arena')); });
+await page.waitForTimeout(1200);
+await page.screenshot({ path: '/tmp/shot_arena.png' });
+await page.evaluate(() => { const D = window.DigitalCasinos; D.goToDest(D.DESTINATIONS.find(d => d.kind === 'garden')); });
+await page.waitForTimeout(1200);
+await page.screenshot({ path: '/tmp/shot_garden.png' });
+console.log('PROBE4', JSON.stringify(probe4));
 
 console.log('PROBE1', JSON.stringify(probe1));
 console.log('PROBE2', JSON.stringify(probe2));

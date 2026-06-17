@@ -18,6 +18,14 @@ import { Economy } from './economy.js';
 import { UI } from './ui.js';
 import { makeDealer } from './characters.js';
 
+// Optional audio — degrade silently if the module or a sound is missing.
+let SFX = null;
+try { import('./audio.js').then(m => { SFX = m.SFX || m.default || null; }).catch(() => {}); }
+catch (e) { /* dynamic import unsupported — stay silent */ }
+function sfx(name) {
+  try { if (SFX && typeof SFX.play === 'function') SFX.play(name); } catch (e) { /* ignore */ }
+}
+
 // =============================================================
 // Shared geometry / material caches
 // A single unit box (scaled per surface) plus a handful of named
@@ -161,7 +169,7 @@ function buildSlots() {
 // ---- Roulette table -------------------------------------------------------
 function buildRoulette() {
   const g = new THREE.Group();
-  const feltMat = mat(C.felt, { rough: 0.9 });
+  const feltMat = mat(C.felt, { rough: 0.85, emissive: C.green, emIntensity: 0.08 });
   const woodMat = mat(C.wood, { rough: 0.6, metal: 0.1 });
   const goldMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.25 });
 
@@ -217,7 +225,7 @@ function buildRoulette() {
 // ---- Blackjack table ------------------------------------------------------
 function buildBlackjack(withDealer = true) {
   const g = new THREE.Group();
-  const feltMat = mat(C.feltDark, { rough: 0.9 });
+  const feltMat = mat(C.feltDark, { rough: 0.85, emissive: C.green, emIntensity: 0.06 });
   const woodMat = mat(C.wood, { rough: 0.6 });
   const goldMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.2 });
 
@@ -248,7 +256,7 @@ function buildBlackjack(withDealer = true) {
   rack.add(box(woodMat, 0.9, 0.08, 0.22, 0, 0, 0));
   const chipCols = [C.red, C.black, C.green, C.gold];
   for (let i = 0; i < 4; i++) {
-    rack.add(cyl(mat(chipCols[i], { rough: 0.4 }), 0.08, 0.12, i * 0.22 - 0.33, 0.1, 0));
+    rack.add(cyl(mat(chipCols[i], { rough: 0.35, metal: 0.2, emissive: chipCols[i], emIntensity: 0.12 }), 0.08, 0.12, i * 0.22 - 0.33, 0.1, 0));
   }
   g.add(rack);
 
@@ -282,7 +290,7 @@ function buildBlackjack(withDealer = true) {
 // ---- Poker table ----------------------------------------------------------
 function buildPoker(withDealer = true) {
   const g = new THREE.Group();
-  const feltMat = mat(C.felt, { rough: 0.9 });
+  const feltMat = mat(C.felt, { rough: 0.85, emissive: C.green, emIntensity: 0.08 });
   const woodMat = mat(C.woodLight, { rough: 0.6 });
   const railMat = mat(0x2a1a10, { rough: 0.5, metal: 0.2 });
   const goldMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.2 });
@@ -319,7 +327,8 @@ function buildPoker(withDealer = true) {
   for (let i = 0; i < 5; i++) {
     const a = (i / 5) * Math.PI * 2;
     const stackH = 0.06 + Math.random() * 0.1;
-    g.add(cyl(mat(chipCols[i % chipCols.length], { rough: 0.4 }),
+    const cc = chipCols[i % chipCols.length];
+    g.add(cyl(mat(cc, { rough: 0.35, metal: 0.2, emissive: cc, emIntensity: 0.12 }),
       0.09, stackH, Math.cos(a) * 1.3, topY + 0.07 + stackH / 2, Math.sin(a) * 0.85));
   }
   // Gold dealer-button accent.
@@ -393,8 +402,17 @@ function buildModalShell(type, subtitle) {
   const cat = GAME_CATALOG[type] || {};
   const node = el('div', 'game-modal');
 
+  // Shared lifecycle: track whether this modal has been closed so pending
+  // timers can bail out of touching detached DOM / settling rounds.
+  const state = { closed: false, onClose: null };
+  function doClose() {
+    state.closed = true;
+    try { if (typeof state.onClose === 'function') state.onClose(); } catch (e) {}
+    try { UI.closeModal(); } catch (e) {}
+  }
+
   const close = btn('Close', 'game-close btn-ghost');
-  close.onclick = () => { try { UI.closeModal(); } catch (e) {} };
+  close.onclick = doClose;
   node.appendChild(close);
 
   node.appendChild(el('h2', null, `${cat.icon || '🎲'} ${cat.name || type}`));
@@ -408,7 +426,11 @@ function buildModalShell(type, subtitle) {
   const body = el('div', 'game-body');
   node.appendChild(body);
 
-  return { node, balanceEl, setBalance, body };
+  return {
+    node, balanceEl, setBalance, body,
+    isClosed: () => state.closed,
+    setOnClose: (fn) => { state.onClose = fn; },
+  };
 }
 
 // A standard bet input row clamped to [minBet, maxBet].
@@ -445,7 +467,7 @@ function openSlots(cfg) {
   const rtp = clamp(cfg.rtp ?? 0.92, 0.5, 0.99);
   const jackpot = Math.max(0, cfg.jackpot ?? 500);
 
-  const { node, setBalance, body } = buildModalShell('slots',
+  const { node, setBalance, body, isClosed, setOnClose } = buildModalShell('slots',
     `Match symbols to win · RTP ~${Math.round(rtp * 100)}%`);
 
   // Reels display.
@@ -516,9 +538,13 @@ function openSlots(cfg) {
 
   // Spin animation + outcome.
   let spinning = false;
+  let tick = null;
+  const locked = [false, false, false];
+  // Stop any in-flight animation if the modal closes mid-spin.
+  setOnClose(() => { if (tick) { clearInterval(tick); tick = null; } });
 
   function spin() {
-    if (spinning) return;
+    if (spinning || isClosed()) return;
     const bet = input.readBet();
     if (!Economy.canAfford(bet)) {
       result.className = 'result-line lose';
@@ -527,26 +553,36 @@ function openSlots(cfg) {
     }
     spinning = true;
     spinBtn.disabled = true;
+    input.disabled = true;
     result.className = 'result-line';
     result.textContent = '';
     reelEls.forEach(r => r.classList.add('spin'));
+    locked[0] = locked[1] = locked[2] = false;
+    sfx('spin');
 
     // Cycle symbols for ~1s, then lock to the final outcome.
     const final = [pickSym(), pickSym(), pickSym()];
     const start = Date.now();
-    const tick = setInterval(() => {
+    tick = setInterval(() => {
+      if (isClosed()) { clearInterval(tick); tick = null; return; }
       const t = Date.now() - start;
       for (let i = 0; i < 3; i++) {
         // Lock reels left-to-right near the end for a nicer feel.
-        if (t > 600 + i * 200) reelEls[i].textContent = SLOT_SYMBOLS[final[i]];
-        else reelEls[i].textContent = SLOT_SYMBOLS[pickSym()];
+        if (t > 600 + i * 200) {
+          reelEls[i].textContent = SLOT_SYMBOLS[final[i]];
+          if (!locked[i]) { locked[i] = true; sfx('reel'); }
+        } else {
+          reelEls[i].textContent = SLOT_SYMBOLS[pickSym()];
+        }
       }
       if (t >= 1100) {
         clearInterval(tick);
+        tick = null;
         reelEls.forEach(r => r.classList.remove('spin'));
         settle(bet, final);
         spinning = false;
         spinBtn.disabled = false;
+        input.disabled = false;
       }
     }, 80);
   }
@@ -583,6 +619,12 @@ function openSlots(cfg) {
     setBalance();
     result.className = 'result-line ' + (win ? 'win' : 'lose');
     result.textContent = msg;
+
+    // Audio cue scaled to the size of the win.
+    if (!win) sfx('lose');
+    else if (a === DIAMOND && b === c) sfx('jackpot');
+    else if (payout >= bet * 8) sfx('bigwin');
+    else sfx('win');
   }
 
   spinBtn.onclick = spin;
@@ -605,7 +647,7 @@ function openRoulette(cfg) {
   const colorPays = Math.max(1, cfg.colorPays ?? 2);   // total returned multiple on red/black
   const greenPays = Math.max(1, cfg.greenPays ?? 14);
 
-  const { node, setBalance, body } = buildModalShell('roulette',
+  const { node, setBalance, body, isClosed, setOnClose } = buildModalShell('roulette',
     'Pick a color, place your bet, and spin.');
 
   // Wheel element (CSS .wheel rotates).
@@ -649,9 +691,18 @@ function openRoulette(cfg) {
 
   let spinning = false;
   let baseTurns = 0; // accumulate so the wheel keeps rotating forward
+  let timer = null;
+  // Disable color selection while the wheel is spinning.
+  function setPicksEnabled(on) {
+    Object.values(chipEls).forEach(e => {
+      e.style.pointerEvents = on ? '' : 'none';
+      e.style.opacity = on ? '' : '0.5';
+    });
+  }
+  setOnClose(() => { if (timer) { clearTimeout(timer); timer = null; } });
 
   function spin() {
-    if (spinning) return;
+    if (spinning || isClosed()) return;
     const bet = input.readBet();
     if (!Economy.canAfford(bet)) {
       result.className = 'result-line lose';
@@ -660,8 +711,11 @@ function openRoulette(cfg) {
     }
     spinning = true;
     spinBtn.disabled = true;
+    input.disabled = true;
+    setPicksEnabled(false);
     result.className = 'result-line';
     result.textContent = 'Spinning…';
+    sfx('spin');
 
     const number = (Math.random() * 37) | 0;   // 0..36
     const color = rouletteColor(number);
@@ -672,7 +726,9 @@ function openRoulette(cfg) {
     wheel.style.transform = `rotate(${deg}deg)`;
 
     // Resolve after the CSS transition (~3s in style.css).
-    setTimeout(() => {
+    timer = setTimeout(() => {
+      timer = null;
+      if (isClosed()) return;
       let payout = 0;
       if (pick === color) {
         payout = (color === 'green')
@@ -687,8 +743,12 @@ function openRoulette(cfg) {
       result.textContent = won
         ? `${number} ${colTxt} — you win! +${fmt(payout)}`
         : `${number} ${colTxt} — you lose ${fmt(bet)}`;
+      if (won) sfx(payout >= bet * 8 ? 'bigwin' : 'win');
+      else sfx('lose');
       spinning = false;
       spinBtn.disabled = false;
+      input.disabled = false;
+      setPicksEnabled(true);
     }, 3100);
   }
 
@@ -751,7 +811,7 @@ function openBlackjack(cfg) {
   const bjPays = Math.max(1, cfg.blackjackPays ?? 1.5);   // bonus multiple over stake
   const standsOn = Math.max(16, cfg.dealerStandsOn ?? 17);
 
-  const { node, setBalance, body } = buildModalShell('blackjack',
+  const { node, setBalance, body, isClosed } = buildModalShell('blackjack',
     `Beat the dealer to 21 · Dealer stands on ${standsOn}`);
 
   // Dealer + player hand areas.
@@ -808,6 +868,7 @@ function openBlackjack(cfg) {
   }
 
   function deal() {
+    if (inRound || isClosed()) return;
     bet = input.readBet();
     if (!Economy.canAfford(bet)) {
       result.className = 'result-line lose';
@@ -821,6 +882,8 @@ function openBlackjack(cfg) {
     result.textContent = '';
     setControls(true);
     renderHands(false);
+    sfx('chip');
+    sfx('card');
 
     // Immediate blackjack resolution.
     const pBJ = isBlackjack(player);
@@ -831,6 +894,7 @@ function openBlackjack(cfg) {
   function hit() {
     if (!inRound) return;
     player.push(deck.pop());
+    sfx('card');
     renderHands(false);
     if (handValue(player) > 21) finishRound();
   }
@@ -838,7 +902,7 @@ function openBlackjack(cfg) {
   function stand() {
     if (!inRound) return;
     // Dealer draws to standsOn.
-    while (handValue(dealer) < standsOn) dealer.push(deck.pop());
+    while (handValue(dealer) < standsOn && deck.length) { dealer.push(deck.pop()); }
     finishRound();
   }
 
@@ -849,7 +913,7 @@ function openBlackjack(cfg) {
     // If the player didn't bust and didn't already trigger a natural,
     // make the dealer play out (covers the natural-vs-natural case too).
     if (pv <= 21 && !pBJ && !dBJ) {
-      while (handValue(dealer) < standsOn) dealer.push(deck.pop());
+      while (handValue(dealer) < standsOn && deck.length) dealer.push(deck.pop());
     }
     const dv = handValue(dealer);
     renderHands(true);
@@ -882,6 +946,11 @@ function openBlackjack(cfg) {
     result.className = 'result-line ' + cls;
     result.textContent = msg;
     setControls(false);
+
+    // Audio cue by outcome.
+    if (cls === 'win') sfx(pBJ ? 'bigwin' : 'win');
+    else if (cls === 'lose') sfx('lose');
+    else sfx('chip'); // push
   }
 
   dealBtn.onclick = deal;
@@ -953,7 +1022,7 @@ function openPoker(cfg) {
     high: 0,
   };
 
-  const { node, setBalance, body } = buildModalShell('poker',
+  const { node, setBalance, body, isClosed } = buildModalShell('poker',
     `5-Card Draw · Ante ${ante} · Jacks-or-better pays`);
 
   const handLabel = el('div', 'hand-label', 'Your Hand');
@@ -1002,6 +1071,7 @@ function openPoker(cfg) {
   }
 
   function deal() {
+    if (phase === 'dealt' || isClosed()) return;
     const stake = ante;
     if (!Economy.canAfford(stake)) {
       result.className = 'result-line lose';
@@ -1020,35 +1090,46 @@ function openPoker(cfg) {
     drawBtn.disabled = false;
     handLabel.textContent = 'Your Hand — hold & draw';
     renderHand();
+    sfx('chip');
+    sfx('card');
   }
 
   function draw() {
     if (phase !== 'dealt') return;
     // Replace non-held cards once.
     for (let i = 0; i < 5; i++) {
-      if (!held[i]) hand[i] = deck.pop();
+      if (!held[i] && deck.length) hand[i] = deck.pop();
     }
     phase = 'done';
     drawBtn.disabled = true;
     renderHand();
+    sfx('card');
 
     const res = evalPoker(hand);
     const mult = pays[res.key] ?? 0;
     // Payout total returned = ante * mult on a win (mult already counts the
     // stake back where mult>=1). 0 means the ante is lost.
     let payout = 0;
-    let cls = 'lose';
-    if (mult > 0) {
-      payout = Math.round(ante * mult);
-      cls = 'win';
-    }
+    if (mult > 0) payout = Math.round(ante * mult);
+    const net = payout - ante;
+    // A win must actually return more than the ante; a multiple of exactly 1
+    // is a push (stake back), not a win.
+    let cls = net > 0 ? 'win' : (payout > 0 ? '' : 'lose');
+
     Economy.wager(ante, payout);
     setBalance();
     result.className = 'result-line ' + cls;
-    result.textContent = payout > 0
-      ? `${res.name}! +${fmt(payout - ante)} (×${mult})`
-      : `${res.name} — no win. Lost ${fmt(ante)}.`;
+    result.textContent = net > 0
+      ? `${res.name}! +${fmt(net)} (×${mult})`
+      : (payout > 0
+        ? `${res.name} — push (ante returned).`
+        : `${res.name} — no win. Lost ${fmt(ante)}.`);
     handLabel.textContent = `Your Hand — ${res.name}`;
+
+    // Audio cue by outcome.
+    if (cls === 'win') sfx(mult >= 9 ? 'bigwin' : 'win');
+    else if (cls === 'lose') sfx('lose');
+    else sfx('chip');
 
     // Allow the next round.
     dealBtn.disabled = false;

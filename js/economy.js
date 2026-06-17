@@ -13,6 +13,7 @@ function defaults() {
     parcels: {},   // key -> { owned:true, casino:false, games:[{type,tile:[tx,tz]}] }
     skin: 'highroller',
     ownedSkins: ['highroller'],
+    rooms: {},       // hotel roomId -> { owned:true, style, name, decor:[{id,...}] }
     inventory: {},   // shop item id -> count
     profile: { name: 'Guest' },
     stats: { wagered: 0, won: 0, spins: 0 },
@@ -127,6 +128,40 @@ class EconomyStore {
   removeDecor(key, index) {
     const p = this.state.parcels[key];
     if (p && p.decor && p.decor[index]) { p.decor.splice(index, 1); this.save(); return true; }
+    return false;
+  }
+
+  // ---- hotel rooms ----
+  getRoom(id) { return this.state.rooms[id] || null; }
+  ownsRoom(id) { return !!(this.state.rooms[id] && this.state.rooms[id].owned); }
+  ownedRoomIds() { return Object.keys(this.state.rooms).filter(k => this.state.rooms[k].owned); }
+  buyRoom(id, styleId, price) {
+    if (this.ownsRoom(id)) return { ok: false, reason: 'already yours' };
+    if (!this.spend(price)) return { ok: false, reason: 'not enough coins' };
+    this.state.rooms[id] = { owned: true, style: styleId || 'standard', decor: [], name: '' };
+    this.save();
+    return { ok: true };
+  }
+  setRoomStyle(id, styleId, cost = 0) {
+    const r = this.state.rooms[id];
+    if (!r || !r.owned) return { ok: false, reason: 'not your room' };
+    if (cost > 0 && !this.spend(cost)) return { ok: false, reason: 'not enough coins' };
+    r.style = styleId; this.save();
+    return { ok: true };
+  }
+  getRoomDecor(id) { const r = this.state.rooms[id]; return (r && r.decor) || []; }
+  addRoomDecor(id, decorId, transform, cost) {
+    const r = this.state.rooms[id];
+    if (!r || !r.owned) return { ok: false, reason: 'not your room' };
+    if (!this.spend(cost)) return { ok: false, reason: 'not enough coins' };
+    r.decor = r.decor || [];
+    r.decor.push({ id: decorId, ...transform });
+    this.save();
+    return { ok: true, index: r.decor.length - 1 };
+  }
+  removeRoomDecor(id, index) {
+    const r = this.state.rooms[id];
+    if (r && r.decor && r.decor[index]) { r.decor.splice(index, 1); this.save(); return true; }
     return false;
   }
 

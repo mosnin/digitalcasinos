@@ -198,3 +198,68 @@ export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export function box3FromRect(r, y0, y1) {
   return new THREE.Box3(new THREE.Vector3(r[0], y0, r[1]), new THREE.Vector3(r[2], y1, r[3]));
 }
+
+// =============================================================
+// HOTEL TOWERS — buy & decorate rooms (wave 3)
+// =============================================================
+
+// Room styles a player can apply to an owned hotel room.
+export const ROOM_STYLES = {
+  standard:  { id: 'standard',  name: 'Standard Room', cost: 300,  wall: 0x4a4450, accent: 0xffd23f, floor: 0x6a4f33, mood: 0xffe7c2 },
+  deluxe:    { id: 'deluxe',    name: 'Deluxe Suite',  cost: 750,  wall: 0x2c2440, accent: 0xff2db8, floor: 0x6a4a2a, mood: 0xffd0f0 },
+  neon:      { id: 'neon',      name: 'Neon Loft',     cost: 1300, wall: 0x121220, accent: 0x18e0ff, floor: 0x24242f, mood: 0xbef9ff },
+  royal:     { id: 'royal',     name: 'Royal Suite',   cost: 2600, wall: 0x281c0a, accent: 0xffd23f, floor: 0x3a2a16, mood: 0xfff0c0 },
+  penthouse: { id: 'penthouse', name: 'Penthouse',     cost: 6000, wall: 0x16161f, accent: 0xffd23f, floor: 0x2c2c38, mood: 0xfff2cf },
+};
+
+export const HOTEL = {
+  HALL_LEN: 216,        // hallway length along Z
+  HALL_W: 10,           // hallway width along X
+  H: 6.5,               // ceiling height
+  DOOR_SPACING: 6,      // a door every N units, both sides
+  ROOM: 9,              // interior room size (square)
+  ROOM_H: 5,
+  PENTHOUSE_SUITES: 6,  // big suites on the penthouse floor
+  FLOORS: [
+    { id: 'h0', name: 'Sapphire Tower — Floor 12', tower: 'Sapphire', style: 'standard', carpet: 0x1b2a44, accent: 0x18e0ff },
+    { id: 'h1', name: 'Sapphire Tower — Floor 27', tower: 'Sapphire', style: 'deluxe',   carpet: 0x2a1b40, accent: 0xff2db8 },
+    { id: 'h2', name: 'Ruby Tower — Sky Floor 44', tower: 'Ruby',     style: 'royal',    carpet: 0x3a1420, accent: 0xffd23f },
+  ],
+  PENTHOUSE: { id: 'ph', name: 'Penthouse & Rooftop Pool', style: 'penthouse', carpet: 0x16161f, accent: 0xffd23f },
+};
+
+// Door slots (rooms) along a hotel hallway floor. Hallway is its own scene
+// centered on origin: Z in [-HALL_LEN/2, HALL_LEN/2], X across HALL_W.
+export function hotelDoorSlots(floorId) {
+  const slots = [];
+  const half = HOTEL.HALL_LEN / 2;
+  const startZ = -half + 12;
+  const per = Math.floor((HOTEL.HALL_LEN - 20) / HOTEL.DOOR_SPACING);
+  for (const side of [-1, 1]) {
+    for (let k = 0; k < per; k++) {
+      const z = startZ + k * HOTEL.DOOR_SPACING;
+      const x = side * (HOTEL.HALL_W / 2);
+      slots.push({
+        roomId: `${floorId}_${side < 0 ? 'L' : 'R'}${k}`,
+        x, z, side, unit: k + 1,
+        rot: side < 0 ? Math.PI / 2 : -Math.PI / 2,
+      });
+    }
+  }
+  return slots;
+}
+export function hotelRoomCount() {
+  const per = Math.floor((HOTEL.HALL_LEN - 20) / HOTEL.DOOR_SPACING) * 2;
+  return per * HOTEL.FLOORS.length + HOTEL.PENTHOUSE_SUITES;
+}
+
+// =============================================================
+// DESTINATIONS — everywhere the elevator can take you.
+// =============================================================
+export const DESTINATIONS = [
+  ...FLOORS.map((f, i) => ({ id: `casino${i}`, kind: 'casino', index: i, name: f.name, group: 'Casino', icon: '🎰' })),
+  ...HOTEL.FLOORS.map((f, i) => ({ id: f.id, kind: 'hotel', index: i, name: f.name, group: `${f.tower} Tower`, icon: '🛏️' })),
+  { id: HOTEL.PENTHOUSE.id, kind: 'penthouse', index: 0, name: HOTEL.PENTHOUSE.name, group: 'Hotel', icon: '🏙️' },
+  { id: 'arena',  kind: 'arena',  index: 0, name: 'Derby Racing Arena', group: 'Attractions', icon: '🏇' },
+  { id: 'garden', kind: 'garden', index: 0, name: 'Botanical Garden',   group: 'Attractions', icon: '🌿' },
+];

@@ -45,6 +45,11 @@ function fogSettingsFor(theme) {
 // ----------------------------------------------------------------
 // Canvas texture cache + private drawing helpers
 // ----------------------------------------------------------------
+// Best anisotropy we can use without a renderer handle. 8 is safely supported
+// on virtually all WebGL2 hardware; installEnvironment() can bump cached
+// textures higher if a renderer is available.
+let MAX_ANISO = 8;
+
 const _texCache = new Map();
 function cachedTexture(key, makeCanvas, configure) {
   let tex = _texCache.get(key);
@@ -65,9 +70,10 @@ function newCanvas(w, h) {
   return c;
 }
 
-// Subtle damask-ish carpet pattern over a base color.
+// Subtle damask-ish carpet pattern over a base color. Higher-res w/ a woven
+// fiber texture, sharper lattice and richer two-tone damask flourishes.
 function drawCarpetCanvas(baseHex) {
-  const S = 256;
+  const S = 512;
   const c = newCanvas(S, S);
   const ctx = c.getContext('2d');
   if (!ctx) return c;
@@ -76,46 +82,77 @@ function drawCarpetCanvas(baseHex) {
   ctx.fillRect(0, 0, S, S);
 
   // lighter + darker accents derived from base
-  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.18);
-  const dark = base.clone().lerp(new THREE.Color(0x000000), 0.4);
+  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.22);
+  const dark = base.clone().lerp(new THREE.Color(0x000000), 0.42);
   const lightCss = `#${light.getHexString()}`;
   const darkCss = `#${dark.getHexString()}`;
 
-  // faint diamond lattice
-  ctx.strokeStyle = darkCss;
+  // fine woven fiber speckle for a plush, non-flat look
+  for (let i = 0; i < 4200; i++) {
+    const x = Math.random() * S, y = Math.random() * S;
+    const up = Math.random() < 0.5;
+    const col = base.clone().lerp(new THREE.Color(up ? 0xffffff : 0x000000), 0.10 + Math.random() * 0.10);
+    ctx.fillStyle = `#${col.getHexString()}`;
+    ctx.globalAlpha = 0.05;
+    ctx.fillRect(x, y, 1.5, 1.5);
+  }
+  ctx.globalAlpha = 1;
+
+  // crisp diamond lattice (two passes: shadow + highlight for relief)
+  const step = 64;
   ctx.lineWidth = 2;
-  ctx.globalAlpha = 0.35;
+  ctx.strokeStyle = darkCss;
+  ctx.globalAlpha = 0.40;
   ctx.beginPath();
-  for (let i = -S; i < S * 2; i += 32) {
+  for (let i = -S; i < S * 2; i += step) {
+    ctx.moveTo(i, 0); ctx.lineTo(i + S, S);
+    ctx.moveTo(i, S); ctx.lineTo(i + S, 0);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = lightCss;
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.22;
+  ctx.beginPath();
+  for (let i = -S + 1; i < S * 2; i += step) {
     ctx.moveTo(i, 0); ctx.lineTo(i + S, S);
     ctx.moveTo(i, S); ctx.lineTo(i + S, 0);
   }
   ctx.stroke();
 
-  // damask dots at lattice intersections
-  ctx.globalAlpha = 0.5;
-  ctx.fillStyle = lightCss;
-  for (let y = 0; y <= S; y += 64) {
-    for (let x = 0; x <= S; x += 64) {
-      const ox = ((y / 64) % 2) ? 32 : 0;
+  // damask medallions at lattice intersections
+  for (let y = 0; y <= S; y += step * 2) {
+    for (let x = 0; x <= S; x += step * 2) {
+      const ox = ((y / (step * 2)) % 2) ? step : 0;
+      const cx = x + ox, cy = y;
+      // soft glow center
+      const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, 22);
+      grad.addColorStop(0, lightCss);
+      grad.addColorStop(1, `#${base.getHexString()}`);
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(x + ox, y, 5, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
       ctx.fill();
-      // little 4-petal flourish
-      ctx.globalAlpha = 0.25;
-      ctx.beginPath();
-      ctx.arc(x + ox, y, 12, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 0.5;
+      // 4-petal flourish
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = lightCss;
+      ctx.lineWidth = 2;
+      for (let p = 0; p < 4; p++) {
+        const a = p * Math.PI / 2;
+        ctx.beginPath();
+        ctx.ellipse(cx + Math.cos(a) * 16, cy + Math.sin(a) * 16, 9, 4, a, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     }
   }
   ctx.globalAlpha = 1;
   return c;
 }
 
-// Soft veiny marble.
+// Soft veiny marble. Higher-res, layered mottling + fine + bold veins,
+// brighter polished sheen.
 function drawMarbleCanvas(baseHex) {
-  const S = 256;
+  const S = 512;
   const c = newCanvas(S, S);
   const ctx = c.getContext('2d');
   if (!ctx) return c;
@@ -123,34 +160,83 @@ function drawMarbleCanvas(baseHex) {
   ctx.fillStyle = `#${base.getHexString()}`;
   ctx.fillRect(0, 0, S, S);
 
-  // mottled background
-  for (let i = 0; i < 600; i++) {
+  // broad cloudy mottling (large soft blobs)
+  for (let i = 0; i < 220; i++) {
     const x = Math.random() * S, y = Math.random() * S;
-    const shade = 0.5 + Math.random() * 0.5;
-    const col = base.clone().lerp(new THREE.Color(0xffffff), (shade - 0.5) * 0.3);
-    ctx.fillStyle = `#${col.getHexString()}`;
-    ctx.globalAlpha = 0.04;
+    const towardWhite = Math.random() < 0.55;
+    const col = base.clone().lerp(new THREE.Color(towardWhite ? 0xffffff : 0xcfc8b8), 0.12 + Math.random() * 0.18);
+    const r = 18 + Math.random() * 60;
+    const grad = ctx.createRadialGradient(x, y, 1, x, y, r);
+    grad.addColorStop(0, `#${col.getHexString()}`);
+    grad.addColorStop(1, `#${base.getHexString()}`);
+    ctx.globalAlpha = 0.06;
+    ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(x, y, 6 + Math.random() * 18, 0, Math.PI * 2);
+    ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  // grey veins
-  const veinCol = base.clone().lerp(new THREE.Color(0x444444), 0.5);
-  ctx.strokeStyle = `#${veinCol.getHexString()}`;
-  for (let v = 0; v < 8; v++) {
-    ctx.globalAlpha = 0.12 + Math.random() * 0.12;
-    ctx.lineWidth = 0.5 + Math.random() * 1.5;
+  // bold dark veins with branching, drawn with soft + sharp pass
+  const veinCol = base.clone().lerp(new THREE.Color(0x3a3a3a), 0.55);
+  const veinCss = `#${veinCol.getHexString()}`;
+  function drawVein(sx, sy, len, jitter, width, alpha) {
+    ctx.strokeStyle = veinCss;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    let x = Math.random() * S, y = 0;
+    let x = sx, y = sy;
     ctx.moveTo(x, y);
-    while (y < S) {
-      x += (Math.random() - 0.5) * 40;
-      y += 8 + Math.random() * 16;
+    let ang = Math.random() * Math.PI * 2;
+    for (let s = 0; s < len; s++) {
+      ang += (Math.random() - 0.5) * jitter;
+      x += Math.cos(ang) * 10;
+      y += Math.sin(ang) * 10;
       ctx.lineTo(x, y);
     }
     ctx.stroke();
+    return { x, y };
+  }
+  for (let v = 0; v < 6; v++) {
+    const sx = Math.random() * S, sy = Math.random() * S;
+    drawVein(sx, sy, 24, 0.5, 2.2 + Math.random() * 1.5, 0.16);
+    // branch
+    if (Math.random() < 0.7) drawVein(sx, sy, 14, 0.8, 1.0, 0.12);
+  }
+  // fine hairline veins for crispness
+  for (let v = 0; v < 16; v++) {
+    drawVein(Math.random() * S, Math.random() * S, 12, 0.9, 0.6, 0.10);
+  }
+
+  // faint bright sheen streak across the slab
+  const sheen = ctx.createLinearGradient(0, 0, S, S);
+  sheen.addColorStop(0.0, 'rgba(255,255,255,0)');
+  sheen.addColorStop(0.5, 'rgba(255,255,255,0.05)');
+  sheen.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, 0, S, S);
+  return c;
+}
+
+// Grayscale roughness/normal-ish helper: a soft mottled grayscale map used to
+// add micro roughness variation to marble (subtle, cached separately).
+function drawMarbleRoughCanvas() {
+  const S = 256;
+  const c = newCanvas(S, S);
+  const ctx = c.getContext('2d');
+  if (!ctx) return c;
+  ctx.fillStyle = '#9a9a9a';
+  ctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 500; i++) {
+    const x = Math.random() * S, y = Math.random() * S;
+    const g = Math.random() < 0.5 ? 60 : 200;
+    ctx.globalAlpha = 0.05;
+    ctx.fillStyle = `rgb(${g},${g},${g})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 4 + Math.random() * 14, 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
   return c;
@@ -184,23 +270,39 @@ function drawSignCanvas(text, colorHex, fontScale) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.font = `bold ${fontPx}px Arial, sans-serif`;
+  ctx.lineJoin = 'round';
 
-  // outer glow passes
+  // wide soft halo passes (large blur, low intensity) for a real glow falloff
   ctx.shadowColor = css;
   ctx.fillStyle = css;
-  for (let i = 0; i < 3; i++) {
-    ctx.shadowBlur = 28 - i * 6;
+  for (let i = 0; i < 4; i++) {
+    ctx.globalAlpha = 0.5;
+    ctx.shadowBlur = 48 - i * 9;
     ctx.fillText(text, W / 2, H / 2);
   }
-  // bright core
-  ctx.shadowBlur = 8;
+  ctx.globalAlpha = 1;
+
+  // tube body: colored stroke + fill so glyphs read as glass neon tubes
+  ctx.shadowBlur = 16;
+  ctx.lineWidth = Math.max(2, fontPx * 0.05);
+  ctx.strokeStyle = css;
+  ctx.strokeText(text, W / 2, H / 2);
   ctx.fillStyle = brightCss;
   ctx.fillText(text, W / 2, H / 2);
-  // tiny white inner highlight
+
+  // bright inner core (tinted toward white but keeps hue)
+  ctx.shadowBlur = 6;
+  ctx.fillStyle = `#${col.clone().lerp(new THREE.Color(0xffffff), 0.78).getHexString()}`;
+  ctx.fillText(text, W / 2, H / 2);
+
+  // thin white-hot center line
   ctx.shadowBlur = 0;
   ctx.fillStyle = '#ffffff';
-  ctx.globalAlpha = 0.85;
+  ctx.globalAlpha = 0.9;
+  ctx.save();
+  ctx.font = `bold ${Math.round(fontPx * 0.97)}px Arial, sans-serif`;
   ctx.fillText(text, W / 2, H / 2);
+  ctx.restore();
   ctx.globalAlpha = 1;
 
   return { canvas: c, w: W, h: H };
@@ -294,12 +396,17 @@ export function neonMaterial(color, intensity = 1.4) {
   const key = `${colorKey(hex)}_${(+intensity).toFixed(2)}`;
   let m = _neonMatCache.get(key);
   if (m) return m;
+  // Slightly brighten the base color toward white so the tube reads as a hot
+  // light source, and push emissive a touch above the requested intensity for
+  // a crisper bloom under tone mapping.
+  const bright = new THREE.Color(hex).lerp(new THREE.Color(0xffffff), 0.12);
   m = new THREE.MeshStandardMaterial({
-    color: hex,
+    color: bright.getHex(),
     emissive: hex,
-    emissiveIntensity: intensity,
-    roughness: 0.25,
+    emissiveIntensity: intensity * 1.25,
+    roughness: 0.2,
     metalness: 0.0,
+    toneMapped: false, // let neon pop past the tone-map ceiling
   });
   _neonMatCache.set(key, m);
   return m;
@@ -323,9 +430,17 @@ export function material(kind, floorDef) {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
           t.repeat.set(20, 14);
           t.colorSpace = THREE.SRGBColorSpace;
-          t.anisotropy = 4;
+          t.anisotropy = MAX_ANISO;
         });
-      m = new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, roughness: 0.95, metalness: 0.0 });
+      // bump map reuses the diffuse for cheap plush relief
+      m = new THREE.MeshStandardMaterial({
+        map: tex,
+        bumpMap: tex,
+        bumpScale: 0.04,
+        color: 0xffffff,
+        roughness: 0.96,
+        metalness: 0.0,
+      });
       break;
     }
     case 'marble': {
@@ -335,9 +450,26 @@ export function material(kind, floorDef) {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
           t.repeat.set(6, 6);
           t.colorSpace = THREE.SRGBColorSpace;
-          t.anisotropy = 4;
+          t.anisotropy = MAX_ANISO;
         });
-      m = new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, roughness: 0.18, metalness: 0.15 });
+      const rough = cachedTexture('marble_rough',
+        () => drawMarbleRoughCanvas(),
+        (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.repeat.set(6, 6);
+          t.anisotropy = MAX_ANISO;
+        });
+      m = new THREE.MeshPhysicalMaterial({
+        map: tex,
+        roughnessMap: rough,
+        color: 0xffffff,
+        roughness: 0.22,
+        metalness: 0.0,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.12,
+        envMapIntensity: 1.1,
+        reflectivity: 0.6,
+      });
       break;
     }
     case 'wall': {
@@ -363,23 +495,32 @@ export function material(kind, floorDef) {
       break;
     }
     case 'glass': {
-      m = new THREE.MeshStandardMaterial({
-        color: 0xbfe6ff,
-        roughness: 0.05,
-        metalness: 0.1,
+      m = new THREE.MeshPhysicalMaterial({
+        color: 0xcfeeff,
+        roughness: 0.03,
+        metalness: 0.0,
         transparent: true,
-        opacity: 0.22,
+        opacity: 0.28,
+        transmission: 0.6,
+        ior: 1.45,
+        thickness: 0.4,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.03,
+        envMapIntensity: 1.4,
         side: THREE.DoubleSide,
       });
       break;
     }
     case 'brass': {
-      m = new THREE.MeshStandardMaterial({
+      m = new THREE.MeshPhysicalMaterial({
         color: toHex(COLORS.brass),
-        roughness: 0.3,
-        metalness: 0.95,
+        roughness: 0.26,
+        metalness: 1.0,
+        clearcoat: 0.5,
+        clearcoatRoughness: 0.25,
+        envMapIntensity: 1.5,
         emissive: mixColor(COLORS.brass, 0x000000, 0.7).getHex(),
-        emissiveIntensity: 0.1,
+        emissiveIntensity: 0.08,
       });
       break;
     }
@@ -415,19 +556,25 @@ export function addInteriorLighting(scene, floorDef) {
   const accentHex = toHex((floorDef && floorDef.accent) != null ? floorDef.accent : COLORS.gold);
 
   // --- base ambient/hemispheric (warm) ---
-  const hemi = new THREE.HemisphereLight(0xfff1d6, 0x3a1820, 0.95);
+  const hemi = new THREE.HemisphereLight(0xfff1d6, 0x3a1820, 1.0);
   scene.add(hemi); added.push(hemi);
 
-  const ambient = new THREE.AmbientLight(0xfff0dd, 0.7);
+  const ambient = new THREE.AmbientLight(0xfff0dd, 0.72);
   scene.add(ambient); added.push(ambient);
 
   // --- soft directional "house" light from above ---
-  const dir = new THREE.DirectionalLight(0xfff4e2, 0.95);
+  const dir = new THREE.DirectionalLight(0xfff4e2, 1.05);
   dir.position.set(20, 60, 10);
   scene.add(dir); added.push(dir);
   if (dir.target) { scene.add(dir.target); added.push(dir.target); }
 
-  // --- 2..4 colored neon point lights tinted to neon/accent ---
+  // --- cool rim/fill from the opposite side for depth & shape ---
+  const rim = new THREE.DirectionalLight(mixColor(neonHex, 0xffffff, 0.4).getHex(), 0.35);
+  rim.position.set(-30, 30, -40);
+  scene.add(rim); added.push(rim);
+  if (rim.target) { scene.add(rim.target); added.push(rim.target); }
+
+  // --- 4 colored neon point lights tinted to neon/accent ---
   const tints = [neonHex, accentHex, mixColor(neonHex, accentHex, 0.5).getHex(), neonHex];
   // spread roughly across the floor footprint (X[-60,60], Z[-42,42])
   const spots = [
@@ -436,12 +583,13 @@ export function addInteriorLighting(scene, floorDef) {
     { x: -34, z: 26 },
     { x: 36, z: 24 },
   ];
-  const count = 4; // within 2..4
+  const count = 4;
+  const baseI = 2.3;
   for (let i = 0; i < count; i++) {
-    const pl = new THREE.PointLight(tints[i % tints.length], 2.0, 95, 1.8);
+    const pl = new THREE.PointLight(tints[i % tints.length], baseI, 105, 1.8);
     pl.position.set(spots[i].x, 5.8, spots[i].z);
     scene.add(pl); added.push(pl);
-    neonLights.push({ light: pl, base: 2.0, phase: i * 1.7, speed: 0.8 + i * 0.15 });
+    neonLights.push({ light: pl, base: baseI, phase: i * 1.7, speed: 0.8 + i * 0.15 });
   }
 
   // --- subtle exponential fog tuned to theme ---
@@ -564,20 +712,28 @@ let _chandShared = null;
 function chandShared() {
   if (_chandShared) return _chandShared;
   _chandShared = {
-    ringGeo: new THREE.TorusGeometry(1.0, 0.05, 8, 32),
-    ring2Geo: new THREE.TorusGeometry(0.6, 0.04, 8, 28),
-    capGeo: new THREE.ConeGeometry(0.18, 0.5, 10),
-    beadGeo: new THREE.IcosahedronGeometry(0.07, 0),
-    rodGeo: new THREE.CylinderGeometry(0.02, 0.02, 1.2, 6),
-    goldMat: neonMaterial(COLORS.gold, 0.9),
-    crystalMat: new THREE.MeshStandardMaterial({
+    ringGeo: new THREE.TorusGeometry(1.15, 0.05, 10, 40),
+    ring2Geo: new THREE.TorusGeometry(0.78, 0.045, 10, 34),
+    ring3Geo: new THREE.TorusGeometry(0.42, 0.04, 8, 28),
+    capGeo: new THREE.ConeGeometry(0.2, 0.55, 12),
+    finialGeo: new THREE.SphereGeometry(0.12, 12, 10),
+    beadGeo: new THREE.OctahedronGeometry(0.075, 0), // faceted crystal
+    rodGeo: new THREE.CylinderGeometry(0.022, 0.022, 1.2, 8),
+    goldMat: neonMaterial(COLORS.gold, 1.1),
+    crystalMat: new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
-      emissive: 0xfff3c0,
-      emissiveIntensity: 1.2,
-      roughness: 0.1,
-      metalness: 0.2,
+      emissive: 0xfff0c0,
+      emissiveIntensity: 1.35,
+      roughness: 0.06,
+      metalness: 0.0,
+      transmission: 0.5,
+      ior: 1.5,
+      thickness: 0.2,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.92,
+      envMapIntensity: 1.6,
     }),
   };
   return _chandShared;
@@ -592,57 +748,63 @@ export function makeChandelier() {
   rod.position.y = 0.6;
   group.add(rod);
 
-  // two gold rings forming the frame
+  // three gold rings forming a tiered frame
   const ring = new THREE.Mesh(g.ringGeo, g.goldMat);
   ring.rotation.x = Math.PI / 2;
+  ring.position.y = -0.05;
   group.add(ring);
 
   const ring2 = new THREE.Mesh(g.ring2Geo, g.goldMat);
   ring2.rotation.x = Math.PI / 2;
-  ring2.position.y = 0.22;
+  ring2.position.y = 0.24;
   group.add(ring2);
 
-  // central cap
+  const ring3 = new THREE.Mesh(g.ring3Geo, g.goldMat);
+  ring3.rotation.x = Math.PI / 2;
+  ring3.position.y = 0.5;
+  group.add(ring3);
+
+  // central cap + glowing finial
   const cap = new THREE.Mesh(g.capGeo, g.goldMat);
   cap.position.y = -0.05;
   group.add(cap);
+  const finial = new THREE.Mesh(g.finialGeo, g.crystalMat);
+  finial.position.y = -0.32;
+  group.add(finial);
 
-  // crystal beads draped around both rings (instanced)
-  const beadCount = 64;
+  // crystal beads draped around three tiers (single instanced mesh)
+  // tiers: [radius, baseY, count, dropStep]
+  const tiers = [
+    { r: 1.15, y: -0.05, n: 56, drop: 0.16 },
+    { r: 0.78, y: 0.24, n: 36, drop: 0.14 },
+    { r: 0.42, y: 0.5, n: 22, drop: 0.12 },
+  ];
+  const beadCount = tiers.reduce((s, t) => s + t.n, 0);
   const beads = new THREE.InstancedMesh(g.beadGeo, g.crystalMat, beadCount);
   const m = new THREE.Matrix4();
   const pos = new THREE.Vector3();
   const quat = new THREE.Quaternion();
+  const eul = new THREE.Euler();
   const scl = new THREE.Vector3(1, 1, 1);
   let idx = 0;
-  // outer ring strands
-  const outer = 40;
-  for (let i = 0; i < outer && idx < beadCount; i++) {
-    const a = (i / outer) * Math.PI * 2;
-    const r = 1.0;
-    const drop = -0.05 - ((i % 3) * 0.18);
-    pos.set(Math.cos(a) * r, drop, Math.sin(a) * r);
-    const s = 0.8 + (i % 3) * 0.25;
-    scl.set(s, s, s);
-    m.compose(pos, quat, scl);
-    beads.setMatrixAt(idx++, m);
-  }
-  // inner ring strands
-  for (let i = 0; i < beadCount - outer && idx < beadCount; i++) {
-    const a = (i / (beadCount - outer)) * Math.PI * 2;
-    const r = 0.6;
-    const drop = 0.15 - ((i % 2) * 0.2);
-    pos.set(Math.cos(a) * r, drop, Math.sin(a) * r);
-    const s = 0.7 + (i % 2) * 0.2;
-    scl.set(s, s, s);
-    m.compose(pos, quat, scl);
-    beads.setMatrixAt(idx++, m);
+  for (const tier of tiers) {
+    for (let i = 0; i < tier.n && idx < beadCount; i++) {
+      const a = (i / tier.n) * Math.PI * 2;
+      const drop = tier.y - 0.05 - ((i % 4) * tier.drop);
+      pos.set(Math.cos(a) * tier.r, drop, Math.sin(a) * tier.r);
+      eul.set(0, a, Math.PI / 6 + (i % 3) * 0.2);
+      quat.setFromEuler(eul);
+      const s = 0.75 + (i % 4) * 0.18;
+      scl.set(s, s * 1.4, s); // elongated teardrop crystals
+      m.compose(pos, quat, scl);
+      beads.setMatrixAt(idx++, m);
+    }
   }
   beads.instanceMatrix.needsUpdate = true;
   group.add(beads);
 
-  // soft warm point light
-  const light = new THREE.PointLight(0xffe6a8, 1.0, 30, 2.0);
+  // soft warm point light (warmer + brighter for opulence)
+  const light = new THREE.PointLight(0xffdfa0, 1.4, 34, 2.0);
   light.position.y = -0.1;
   group.add(light);
 
@@ -683,4 +845,98 @@ export function makeWindowSkyline() {
   const mesh = new THREE.Mesh(_skylineGeo, skylineMaterial());
   mesh.userData.isSkyline = true;
   return mesh;
+}
+
+// ----------------------------------------------------------------
+// installEnvironment(renderer, scene) -> THREE.Texture | null
+// Build a small PMREM environment from a procedural gradient "room" so that
+// marble / brass / glass pick up real reflections. Fully guarded: returns null
+// and is a no-op on any failure. The generated env map is cached and reused
+// across calls (and across scenes) so this is cheap to call repeatedly.
+// ----------------------------------------------------------------
+let _envTexture = null;
+let _envTried = false;
+
+// Procedural equirect-ish gradient canvas used as the PMREM source. A warm
+// Vegas glow up top fading to a darker floor, with a couple of soft light pools
+// to give metals/marble something to reflect.
+function drawEnvCanvas() {
+  const W = 512, H = 256;
+  const c = newCanvas(W, H);
+  const ctx = c.getContext('2d');
+  if (!ctx) return c;
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0.0, '#2a2030'); // upper warm-violet ambience
+  sky.addColorStop(0.45, '#3a2a3a');
+  sky.addColorStop(0.6, '#54402f'); // warm horizon band (gilded glow)
+  sky.addColorStop(0.75, '#241820');
+  sky.addColorStop(1.0, '#0a0810'); // dark floor
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // soft bright light pools near the horizon for specular highlights
+  const pools = [
+    { x: W * 0.22, y: H * 0.52, r: 70, col: 'rgba(255,225,170,0.55)' },
+    { x: W * 0.62, y: H * 0.5, r: 90, col: 'rgba(255,120,210,0.30)' },
+    { x: W * 0.85, y: H * 0.55, r: 60, col: 'rgba(120,224,255,0.28)' },
+  ];
+  for (const p of pools) {
+    const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, p.r);
+    g.addColorStop(0, p.col);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+  return c;
+}
+
+export function installEnvironment(renderer, scene) {
+  try {
+    // Try to raise anisotropy on already-cached textures now that we have a
+    // real renderer to query the hardware limit.
+    if (renderer && renderer.capabilities && typeof renderer.capabilities.getMaxAnisotropy === 'function') {
+      const max = renderer.capabilities.getMaxAnisotropy() || MAX_ANISO;
+      if (max > MAX_ANISO) {
+        MAX_ANISO = max;
+        for (const tex of _texCache.values()) {
+          if (tex && 'anisotropy' in tex && tex.anisotropy < max && tex.repeat && (tex.repeat.x > 1 || tex.repeat.y > 1)) {
+            tex.anisotropy = max;
+            tex.needsUpdate = true;
+          }
+        }
+      }
+    }
+
+    // Reuse a previously generated env map.
+    if (_envTexture) {
+      if (scene) scene.environment = _envTexture;
+      return _envTexture;
+    }
+    if (_envTried) return null; // already failed once; don't keep churning
+    _envTried = true;
+
+    if (!renderer || typeof THREE.PMREMGenerator !== 'function') return null;
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader && pmrem.compileEquirectangularShader();
+
+    const canvas = drawEnvCanvas();
+    const srcTex = new THREE.CanvasTexture(canvas);
+    srcTex.mapping = THREE.EquirectangularReflectionMapping;
+    srcTex.colorSpace = THREE.SRGBColorSpace;
+    srcTex.needsUpdate = true;
+
+    const rt = pmrem.fromEquirectangular(srcTex);
+    _envTexture = rt && rt.texture ? rt.texture : null;
+
+    // PMREM source no longer needed; the prefiltered RT texture is what we keep.
+    srcTex.dispose();
+    pmrem.dispose();
+
+    if (_envTexture && scene) scene.environment = _envTexture;
+    return _envTexture;
+  } catch (e) {
+    // Never throw from a visual helper.
+    return _envTexture || null;
+  }
 }

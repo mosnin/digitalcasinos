@@ -77,11 +77,36 @@ To enable accounts + cloud saves:
    create policy "own save" on saves for all
      using (auth.uid() = user_id) with check (auth.uid() = user_id);
    ```
-2. Put your keys in `js/config.js` (`SUPABASE.url` / `SUPABASE.anonKey`), or set
+2. For multiplayer + shared ownership + leaderboard, also create the `holdings`
+   and `leaderboard` tables — the exact SQL (with RLS) is in the top comments of
+   `js/holdings.js` and `js/leaderboard.js`.
+3. Put your keys in `js/config.js` (`SUPABASE.url` / `SUPABASE.anonKey`), or set
    `window.SUPABASE_CONFIG = { url, anonKey }` before `main.js` loads.
-3. A login form appears on the start screen; sign up / log in to sync.
+4. A login form appears on the start screen; sign up / log in to sync. Once
+   configured, you'll see other online players walking the resort in real time.
 
 No secrets are committed — keys are read from config only.
+
+## 🏨 The resort (wave 3) & multiplayer (wave 4)
+
+A Las-Vegas-scale resort connected by a **physical elevator** (press **Y** anywhere,
+or **E** at an elevator). Destinations:
+
+- **Casino floors** — the four gaming sections.
+- **Hotel towers** — long hallways with hundreds of **buyable rooms**; buy a room
+  (**E** at a door), **enter and decorate** it, and pick a **room style** (**B** inside).
+- **Penthouse** — luxury suites + a **rooftop pool**.
+- **Derby Racing Arena** — bet on **horse races** at the kiosk (**E**).
+- **Botanical Garden** — a serene daytime stroll.
+
+**Online multiplayer (Supabase Realtime):** when Supabase is configured you see
+**other players walking around** in real time (Presence + Broadcast), and a shared
+`holdings` table shows **who owns which parcels and rooms** (owner names appear in
+the HUD). Guest mode runs fully single-player.
+
+Plus: **profile/portfolio** (**I**), **daily quests** (**Q**), a **bank & vault**
+with loans + interest (**N**), an **activity feed**, **background music** (**Z**),
+a **pause menu** (**`**), and a first-run **tutorial** (**H**).
 
 ## 🌟 Extra depth
 
