@@ -34,9 +34,13 @@ connection is required the first time.
 | **G** | Open/close **Build mode** (place games & decorations) |
 | **F** | Place the selected item · **R** rotate (or **R** to edit a game's mechanics) |
 | **X** | Remove the item under you |
-| **M** | World map of the current floor |
-| **P** | Style & Skins shop · **T** Gift shop |
+| **K** | Games Lobby (craps, wheel, baccarat, keno) |
+| **J** | Achievements · **L** Leaderboard · **C** Daily bonus |
+| **M** | World map · **P** Skins · **T** Gift shop · **O** Settings |
 | **Esc** | Release the mouse / close menus |
+
+A live **minimap** sits bottom-left, and on touch devices an on-screen
+joystick + buttons appear automatically.
 
 ## 🏨 The mega-casino (floors / sections)
 
@@ -79,6 +83,40 @@ To enable accounts + cloud saves:
 
 No secrets are committed — keys are read from config only.
 
+## 🌟 Extra depth
+
+- **Sound** — fully procedural Web Audio SFX + per-floor ambience (no asset files).
+- **Neon bloom** — `UnrealBloomPass` post-processing makes signage glow.
+- **Passive income** — NPC patrons walk up to *your* machines and play them, paying you out.
+- **Achievements** (`J`), **daily login bonus** with streaks (`C`), and a **net-worth leaderboard** (`L`, Supabase-backed or local).
+- **Games Lobby** (`K`) with extra games to play instantly: craps, wheel of fortune, baccarat, keno.
+- **Settings** (`O`): volume, FOV, mouse sensitivity, bloom, minimap, crowd toggles.
+- **Minimap** radar and **mobile touch controls**.
+
+## 🚀 Deploy to Vercel
+
+It's a static site with **no build step**, so deployment is trivial.
+
+**Option A — dashboard:** Import the GitHub repo at [vercel.com/new](https://vercel.com/new).
+When asked for a framework choose **Other**, leave the Build Command and Output
+Directory **empty**, and deploy. `vercel.json` is already included.
+
+**Option B — CLI:**
+```bash
+npm i -g vercel
+vercel        # preview deploy
+vercel --prod # production
+```
+
+To enable Supabase accounts on the deployed site, either edit
+`js/config.js` with your keys, or add a tiny inline script in `index.html`
+before `main.js`:
+```html
+<script>window.SUPABASE_CONFIG = { url: "https://xxx.supabase.co", anonKey: "eyJ..." };</script>
+```
+(The Supabase anon key is safe to expose client-side; Row-Level Security
+protects the data — see the SQL above.)
+
 ## 🧱 Architecture
 
 Modular browser-native ES modules in `js/`, all coded against a shared contract
@@ -102,7 +140,11 @@ Modular browser-native ES modules in `js/`, all coded against a shared contract
 | `player.js` | First/third-person controller + avatar |
 | `main.js` | Wires everything into the game loop |
 
-Built as a parallel multi-agent effort; see `CONTRACT.md` for the module interfaces.
+Wave-2 depth modules: `audio.js`, `postfx.js`, `patrons.js`, `achievements.js`,
+`dailybonus.js`, `settings.js`, `minimap.js`, `touch.js`, `leaderboard.js`,
+`gameslobby.js`.
+
+Built as a parallel multi-agent effort; see `CONTRACT.md` and `CONTRACT2.md` for the module interfaces.
 
 ## 🧪 Dev smoke test
 
