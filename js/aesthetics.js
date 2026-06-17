@@ -1,8 +1,15 @@
 // =============================================================
 // Digital Casinos — aesthetics.js
-// Visual / atmosphere toolkit for the Vegas-night interior look.
+// Visual / atmosphere toolkit for the warm, upscale Las-Vegas
+// casino-resort interior look.
 // Consumed by casino.js and venues.js. Pure visual helpers — never
 // throws on missing data, caches geometries/materials aggressively.
+//
+// Wave 5 overhaul: removed the saturated pink/cyan neon glow in favor
+// of a realistic warm-amber resort palette — cream/ivory veined marble,
+// dark walnut/cherry wood, burgundy/emerald patterned carpet, brushed
+// brass/gold, clear glass, warm plaster walls. Signage is now tasteful
+// backlit/edge-lit lettering, lighting is warm and bright, fog is thin.
 // =============================================================
 import * as THREE from 'three';
 import { COLORS } from './config.js';
@@ -25,6 +32,15 @@ function mixColor(a, b, t) {
   return ca.lerp(cb, THREE.MathUtils.clamp(t, 0, 1));
 }
 
+// Warm amber reference used to tint accents toward a gilded resort glow.
+const WARM_HEX = 0xffcf8a;
+
+// Nudge an arbitrary color toward warm amber so stray cyans/magentas read
+// as classy gilded accents rather than club neon.
+function warmify(hex, amount) {
+  return mixColor(hex, WARM_HEX, THREE.MathUtils.clamp(amount, 0, 1));
+}
+
 // ----------------------------------------------------------------
 // Per-theme atmosphere tuning
 // ----------------------------------------------------------------
@@ -32,13 +48,15 @@ function themeOf(floorDef) {
   return (floorDef && floorDef.theme) || 'classic';
 }
 
+// Thin, warm haze only — low density so the floor stays bright and readable.
+// No saturated cyan/purple fog anymore; everything trends to warm taupe.
 function fogSettingsFor(theme) {
   switch (theme) {
-    case 'pool':       return { color: 0x123a4d, density: 0.0055 }; // cool cyan haze
-    case 'highroller': return { color: 0x241038, density: 0.0065 }; // deep purple
-    case 'promenade':  return { color: 0x1a2630, density: 0.0055 }; // teal promenade
+    case 'pool':       return { color: 0x2b2a2e, density: 0.0018 }; // cool-neutral, very light
+    case 'highroller': return { color: 0x2a2320, density: 0.0022 }; // warm dusk
+    case 'promenade':  return { color: 0x2b2825, density: 0.0020 }; // warm taupe
     case 'classic':
-    default:           return { color: 0x3a1018, density: 0.006 };  // warm red
+    default:           return { color: 0x2e271f, density: 0.0022 }; // warm amber haze
   }
 }
 
@@ -70,8 +88,10 @@ function newCanvas(w, h) {
   return c;
 }
 
-// Subtle damask-ish carpet pattern over a base color. Higher-res w/ a woven
-// fiber texture, sharper lattice and richer two-tone damask flourishes.
+// Subtle, refined damask carpet pattern over a rich base color (burgundy /
+// emerald). Tightly woven fiber speckle, a soft tone-on-tone diamond lattice
+// and understated medallions — reads as a real upscale patterned carpet, not
+// a glowing club floor.
 function drawCarpetCanvas(baseHex) {
   const S = 512;
   const c = newCanvas(S, S);
@@ -81,28 +101,28 @@ function drawCarpetCanvas(baseHex) {
   ctx.fillStyle = `#${base.getHexString()}`;
   ctx.fillRect(0, 0, S, S);
 
-  // lighter + darker accents derived from base
-  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.22);
-  const dark = base.clone().lerp(new THREE.Color(0x000000), 0.42);
+  // tone-on-tone accents derived from base (kept subtle for realism)
+  const light = base.clone().lerp(new THREE.Color(0xffffff), 0.14);
+  const dark = base.clone().lerp(new THREE.Color(0x000000), 0.38);
   const lightCss = `#${light.getHexString()}`;
   const darkCss = `#${dark.getHexString()}`;
 
-  // fine woven fiber speckle for a plush, non-flat look
-  for (let i = 0; i < 4200; i++) {
+  // dense fine woven fiber speckle for a plush, non-flat look
+  for (let i = 0; i < 5200; i++) {
     const x = Math.random() * S, y = Math.random() * S;
     const up = Math.random() < 0.5;
-    const col = base.clone().lerp(new THREE.Color(up ? 0xffffff : 0x000000), 0.10 + Math.random() * 0.10);
+    const col = base.clone().lerp(new THREE.Color(up ? 0xffffff : 0x000000), 0.06 + Math.random() * 0.08);
     ctx.fillStyle = `#${col.getHexString()}`;
-    ctx.globalAlpha = 0.05;
-    ctx.fillRect(x, y, 1.5, 1.5);
+    ctx.globalAlpha = 0.045;
+    ctx.fillRect(x, y, 1.4, 1.4);
   }
   ctx.globalAlpha = 1;
 
-  // crisp diamond lattice (two passes: shadow + highlight for relief)
+  // soft tone-on-tone diamond lattice (shadow + highlight for gentle relief)
   const step = 64;
   ctx.lineWidth = 2;
   ctx.strokeStyle = darkCss;
-  ctx.globalAlpha = 0.40;
+  ctx.globalAlpha = 0.22;
   ctx.beginPath();
   for (let i = -S; i < S * 2; i += step) {
     ctx.moveTo(i, 0); ctx.lineTo(i + S, S);
@@ -111,7 +131,7 @@ function drawCarpetCanvas(baseHex) {
   ctx.stroke();
   ctx.strokeStyle = lightCss;
   ctx.lineWidth = 1;
-  ctx.globalAlpha = 0.22;
+  ctx.globalAlpha = 0.12;
   ctx.beginPath();
   for (let i = -S + 1; i < S * 2; i += step) {
     ctx.moveTo(i, 0); ctx.lineTo(i + S, S);
@@ -119,28 +139,27 @@ function drawCarpetCanvas(baseHex) {
   }
   ctx.stroke();
 
-  // damask medallions at lattice intersections
+  // understated damask medallions at lattice intersections
   for (let y = 0; y <= S; y += step * 2) {
     for (let x = 0; x <= S; x += step * 2) {
       const ox = ((y / (step * 2)) % 2) ? step : 0;
       const cx = x + ox, cy = y;
-      // soft glow center
       const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, 22);
       grad.addColorStop(0, lightCss);
       grad.addColorStop(1, `#${base.getHexString()}`);
-      ctx.globalAlpha = 0.55;
+      ctx.globalAlpha = 0.30;
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 9, 0, Math.PI * 2);
       ctx.fill();
-      // 4-petal flourish
-      ctx.globalAlpha = 0.3;
+      // 4-petal flourish (faint)
+      ctx.globalAlpha = 0.16;
       ctx.strokeStyle = lightCss;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.5;
       for (let p = 0; p < 4; p++) {
         const a = p * Math.PI / 2;
         ctx.beginPath();
-        ctx.ellipse(cx + Math.cos(a) * 16, cy + Math.sin(a) * 16, 9, 4, a, 0, Math.PI * 2);
+        ctx.ellipse(cx + Math.cos(a) * 15, cy + Math.sin(a) * 15, 8, 3.5, a, 0, Math.PI * 2);
         ctx.stroke();
       }
     }
@@ -149,8 +168,9 @@ function drawCarpetCanvas(baseHex) {
   return c;
 }
 
-// Soft veiny marble. Higher-res, layered mottling + fine + bold veins,
-// brighter polished sheen.
+// Realistic cream/ivory veined marble. Warm ivory base, soft cloudy mottling,
+// fine grey-gold veining and a faint polished sheen — quarried stone, not a
+// glowing surface.
 function drawMarbleCanvas(baseHex) {
   const S = 512;
   const c = newCanvas(S, S);
@@ -160,16 +180,17 @@ function drawMarbleCanvas(baseHex) {
   ctx.fillStyle = `#${base.getHexString()}`;
   ctx.fillRect(0, 0, S, S);
 
-  // broad cloudy mottling (large soft blobs)
-  for (let i = 0; i < 220; i++) {
+  // broad cloudy mottling — warm cream lights and soft taupe shadows
+  for (let i = 0; i < 240; i++) {
     const x = Math.random() * S, y = Math.random() * S;
-    const towardWhite = Math.random() < 0.55;
-    const col = base.clone().lerp(new THREE.Color(towardWhite ? 0xffffff : 0xcfc8b8), 0.12 + Math.random() * 0.18);
-    const r = 18 + Math.random() * 60;
+    const towardWhite = Math.random() < 0.6;
+    const col = base.clone().lerp(
+      new THREE.Color(towardWhite ? 0xfffaf0 : 0xcfc4ad), 0.10 + Math.random() * 0.16);
+    const r = 18 + Math.random() * 64;
     const grad = ctx.createRadialGradient(x, y, 1, x, y, r);
     grad.addColorStop(0, `#${col.getHexString()}`);
     grad.addColorStop(1, `#${base.getHexString()}`);
-    ctx.globalAlpha = 0.06;
+    ctx.globalAlpha = 0.055;
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -177,8 +198,8 @@ function drawMarbleCanvas(baseHex) {
   }
   ctx.globalAlpha = 1;
 
-  // bold dark veins with branching, drawn with soft + sharp pass
-  const veinCol = base.clone().lerp(new THREE.Color(0x3a3a3a), 0.55);
+  // bold veins with branching — warm grey/gold, soft + sharp pass
+  const veinCol = base.clone().lerp(new THREE.Color(0x8a7a5e), 0.55);
   const veinCss = `#${veinCol.getHexString()}`;
   function drawVein(sx, sy, len, jitter, width, alpha) {
     ctx.strokeStyle = veinCss;
@@ -200,19 +221,18 @@ function drawMarbleCanvas(baseHex) {
   }
   for (let v = 0; v < 6; v++) {
     const sx = Math.random() * S, sy = Math.random() * S;
-    drawVein(sx, sy, 24, 0.5, 2.2 + Math.random() * 1.5, 0.16);
-    // branch
-    if (Math.random() < 0.7) drawVein(sx, sy, 14, 0.8, 1.0, 0.12);
+    drawVein(sx, sy, 24, 0.5, 1.8 + Math.random() * 1.3, 0.14);
+    if (Math.random() < 0.7) drawVein(sx, sy, 14, 0.8, 0.9, 0.10);
   }
   // fine hairline veins for crispness
   for (let v = 0; v < 16; v++) {
-    drawVein(Math.random() * S, Math.random() * S, 12, 0.9, 0.6, 0.10);
+    drawVein(Math.random() * S, Math.random() * S, 12, 0.9, 0.5, 0.08);
   }
 
-  // faint bright sheen streak across the slab
+  // faint polished sheen streak across the slab
   const sheen = ctx.createLinearGradient(0, 0, S, S);
   sheen.addColorStop(0.0, 'rgba(255,255,255,0)');
-  sheen.addColorStop(0.5, 'rgba(255,255,255,0.05)');
+  sheen.addColorStop(0.5, 'rgba(255,255,255,0.04)');
   sheen.addColorStop(1.0, 'rgba(255,255,255,0)');
   ctx.globalAlpha = 1;
   ctx.fillStyle = sheen;
@@ -220,18 +240,18 @@ function drawMarbleCanvas(baseHex) {
   return c;
 }
 
-// Grayscale roughness/normal-ish helper: a soft mottled grayscale map used to
-// add micro roughness variation to marble (subtle, cached separately).
+// Grayscale roughness helper: a soft mottled grayscale map used to add micro
+// roughness variation to marble (subtle, cached separately).
 function drawMarbleRoughCanvas() {
   const S = 256;
   const c = newCanvas(S, S);
   const ctx = c.getContext('2d');
   if (!ctx) return c;
-  ctx.fillStyle = '#9a9a9a';
+  ctx.fillStyle = '#7a7a7a';
   ctx.fillRect(0, 0, S, S);
   for (let i = 0; i < 500; i++) {
     const x = Math.random() * S, y = Math.random() * S;
-    const g = Math.random() < 0.5 ? 60 : 200;
+    const g = Math.random() < 0.5 ? 90 : 170;
     ctx.globalAlpha = 0.05;
     ctx.fillStyle = `rgb(${g},${g},${g})`;
     ctx.beginPath();
@@ -242,7 +262,75 @@ function drawMarbleRoughCanvas() {
   return c;
 }
 
-// Glowing neon text on transparent -> used as an emissive map.
+// Realistic wood grain (dark walnut / cherry). Layered tonal bands with fine
+// streaks and occasional knots — used by the 'wood' material.
+function drawWoodCanvas(baseHex) {
+  const S = 512;
+  const c = newCanvas(S, S);
+  const ctx = c.getContext('2d');
+  if (!ctx) return c;
+  const base = new THREE.Color(toHex(baseHex));
+  ctx.fillStyle = `#${base.getHexString()}`;
+  ctx.fillRect(0, 0, S, S);
+
+  // broad vertical tonal bands (plank-to-plank variation)
+  for (let x = 0; x < S; x += 4) {
+    const t = (Math.sin(x * 0.06) + Math.sin(x * 0.017 + 1.3)) * 0.5;
+    const shade = base.clone().lerp(new THREE.Color(t > 0 ? 0x2a160a : 0x000000), 0.10 + Math.abs(t) * 0.10);
+    ctx.fillStyle = `#${shade.getHexString()}`;
+    ctx.globalAlpha = 0.5;
+    ctx.fillRect(x, 0, 4, S);
+  }
+  ctx.globalAlpha = 1;
+
+  // long fine grain streaks
+  const darkGrain = base.clone().lerp(new THREE.Color(0x000000), 0.5);
+  const lightGrain = base.clone().lerp(new THREE.Color(0x6a3d1e), 0.4);
+  for (let i = 0; i < 260; i++) {
+    const x = Math.random() * S;
+    const sway = 6 + Math.random() * 10;
+    ctx.strokeStyle = `#${(Math.random() < 0.6 ? darkGrain : lightGrain).getHexString()}`;
+    ctx.globalAlpha = 0.10 + Math.random() * 0.12;
+    ctx.lineWidth = 0.6 + Math.random() * 1.2;
+    ctx.beginPath();
+    let yx = x;
+    ctx.moveTo(yx, 0);
+    for (let y = 0; y <= S; y += 16) {
+      yx += (Math.random() - 0.5) * sway * 0.5;
+      ctx.lineTo(yx, y);
+    }
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // a few subtle knots
+  for (let i = 0; i < 3; i++) {
+    const kx = Math.random() * S, ky = Math.random() * S;
+    const r = 6 + Math.random() * 10;
+    const g = ctx.createRadialGradient(kx, ky, 1, kx, ky, r);
+    g.addColorStop(0, `#${darkGrain.getHexString()}`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(kx, ky, r * 0.7, r, Math.random() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // faint warm satin sheen
+  const sheen = ctx.createLinearGradient(0, 0, 0, S);
+  sheen.addColorStop(0.0, 'rgba(255,235,200,0)');
+  sheen.addColorStop(0.5, 'rgba(255,235,200,0.05)');
+  sheen.addColorStop(1.0, 'rgba(255,235,200,0)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, 0, S, S);
+  return c;
+}
+
+// Tasteful BACKLIT sign canvas: a clean, crisp glyph rendering with only a
+// soft warm edge-glow (low intensity) — no fat glowing tube halo. Tints the
+// requested color toward warm white/gold so signage reads classy.
 function drawSignCanvas(text, colorHex, fontScale) {
   text = String(text == null ? '' : text);
   const pad = 40;
@@ -252,7 +340,7 @@ function drawSignCanvas(text, colorHex, fontScale) {
   const mctx = meas.getContext('2d');
   let textW = text.length * fontPx * 0.6;
   if (mctx) {
-    mctx.font = `bold ${fontPx}px Arial, sans-serif`;
+    mctx.font = `600 ${fontPx}px "Times New Roman", Georgia, serif`;
     textW = Math.max(8, mctx.measureText(text).width);
   }
   const W = Math.ceil(textW + pad * 2);
@@ -261,93 +349,87 @@ function drawSignCanvas(text, colorHex, fontScale) {
   const ctx = c.getContext('2d');
   if (!ctx) return { canvas: c, w: W, h: H };
 
-  const col = new THREE.Color(toHex(colorHex));
-  const css = `#${col.getHexString()}`;
-  const bright = col.clone().lerp(new THREE.Color(0xffffff), 0.55);
-  const brightCss = `#${bright.getHexString()}`;
+  // Warm, gilded lettering color — pull the requested hue strongly toward a
+  // warm gold/white so it never reads as a saturated neon tube.
+  const warm = warmify(colorHex, 0.7).lerp(new THREE.Color(0xffffff), 0.15);
+  const warmCss = `#${warm.getHexString()}`;
+  const edge = warmify(colorHex, 0.55).lerp(new THREE.Color(0x000000), 0.1);
+  const edgeCss = `#${edge.getHexString()}`;
 
   ctx.clearRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `bold ${fontPx}px Arial, sans-serif`;
+  ctx.font = `600 ${fontPx}px "Times New Roman", Georgia, serif`;
   ctx.lineJoin = 'round';
 
-  // wide soft halo passes (large blur, low intensity) for a real glow falloff
-  ctx.shadowColor = css;
-  ctx.fillStyle = css;
-  for (let i = 0; i < 4; i++) {
-    ctx.globalAlpha = 0.5;
-    ctx.shadowBlur = 48 - i * 9;
-    ctx.fillText(text, W / 2, H / 2);
-  }
+  // single soft warm edge-glow (low intensity backlight, not a tube halo)
+  ctx.shadowColor = warmCss;
+  ctx.shadowBlur = Math.max(6, fontPx * 0.14);
+  ctx.fillStyle = edgeCss;
+  ctx.globalAlpha = 0.55;
+  ctx.fillText(text, W / 2, H / 2);
   ctx.globalAlpha = 1;
 
-  // tube body: colored stroke + fill so glyphs read as glass neon tubes
-  ctx.shadowBlur = 16;
-  ctx.lineWidth = Math.max(2, fontPx * 0.05);
-  ctx.strokeStyle = css;
-  ctx.strokeText(text, W / 2, H / 2);
-  ctx.fillStyle = brightCss;
-  ctx.fillText(text, W / 2, H / 2);
-
-  // bright inner core (tinted toward white but keeps hue)
-  ctx.shadowBlur = 6;
-  ctx.fillStyle = `#${col.clone().lerp(new THREE.Color(0xffffff), 0.78).getHexString()}`;
-  ctx.fillText(text, W / 2, H / 2);
-
-  // thin white-hot center line
+  // crisp metallic letter body with a subtle vertical gradient (brushed gold)
   ctx.shadowBlur = 0;
-  ctx.fillStyle = '#ffffff';
-  ctx.globalAlpha = 0.9;
-  ctx.save();
-  ctx.font = `bold ${Math.round(fontPx * 0.97)}px Arial, sans-serif`;
+  const grad = ctx.createLinearGradient(0, H / 2 - fontPx / 2, 0, H / 2 + fontPx / 2);
+  grad.addColorStop(0.0, `#${warm.clone().lerp(new THREE.Color(0xffffff), 0.35).getHexString()}`);
+  grad.addColorStop(0.5, warmCss);
+  grad.addColorStop(1.0, `#${warm.clone().lerp(new THREE.Color(0x000000), 0.2).getHexString()}`);
+  ctx.fillStyle = grad;
   ctx.fillText(text, W / 2, H / 2);
-  ctx.restore();
+
+  // thin clean outline to keep the glyphs legible
+  ctx.lineWidth = Math.max(1, fontPx * 0.02);
+  ctx.strokeStyle = `#${warm.clone().lerp(new THREE.Color(0x000000), 0.35).getHexString()}`;
+  ctx.globalAlpha = 0.6;
+  ctx.strokeText(text, W / 2, H / 2);
   ctx.globalAlpha = 1;
 
   return { canvas: c, w: W, h: H };
 }
 
-// Vegas night skyline backdrop.
+// Realistic dusk/night city skyline backdrop. Warm window lights dominate;
+// just a couple of cool windows for variety — far less cartoon-neon.
 function drawSkylineCanvas() {
   const W = 2048, H = 512;
   const c = newCanvas(W, H);
   const ctx = c.getContext('2d');
   if (!ctx) return c;
 
-  // gradient night sky
+  // gradient dusk sky — deep blue fading to a warm amber horizon glow
   const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0.0, '#05060f');
-  sky.addColorStop(0.55, '#101637');
-  sky.addColorStop(0.78, '#3a1f5c');
-  sky.addColorStop(0.92, '#7a2f6a');
-  sky.addColorStop(1.0, '#1a0c1e');
+  sky.addColorStop(0.0, '#080b18');
+  sky.addColorStop(0.5, '#16203b');
+  sky.addColorStop(0.78, '#3d3147');
+  sky.addColorStop(0.9, '#7a5436');  // warm dusk band
+  sky.addColorStop(1.0, '#241a14');
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
 
   // stars
-  ctx.fillStyle = '#ffffff';
-  for (let i = 0; i < 260; i++) {
+  ctx.fillStyle = '#fff6e6';
+  for (let i = 0; i < 220; i++) {
     const x = Math.random() * W;
-    const y = Math.random() * H * 0.5;
-    ctx.globalAlpha = 0.2 + Math.random() * 0.7;
-    ctx.fillRect(x, y, 1.5, 1.5);
+    const y = Math.random() * H * 0.45;
+    ctx.globalAlpha = 0.15 + Math.random() * 0.55;
+    ctx.fillRect(x, y, 1.4, 1.4);
   }
   ctx.globalAlpha = 1;
 
   // distant skyline layer (darker)
-  drawBuildingRow(ctx, W, H, H * 0.62, '#0a0c1c', 0.55, 60, 140, false);
+  drawBuildingRow(ctx, W, H, H * 0.62, '#0c0f1e', 0.55, 60, 140, false);
   // mid skyline
-  drawBuildingRow(ctx, W, H, H * 0.5, '#11142b', 0.85, 50, 220, true);
+  drawBuildingRow(ctx, W, H, H * 0.5, '#13182f', 0.85, 50, 220, true);
   // foreground skyline (taller towers w/ lit windows)
-  drawBuildingRow(ctx, W, H, H * 0.32, '#0c0e1f', 1.0, 70, 320, true);
+  drawBuildingRow(ctx, W, H, H * 0.32, '#0e1122', 1.0, 70, 320, true);
 
-  // a couple of glowing landmark beams
+  // a couple of soft warm landmark beams
   for (let i = 0; i < 3; i++) {
     const bx = (0.2 + i * 0.3) * W + (Math.random() - 0.5) * 120;
     const grad = ctx.createLinearGradient(bx, H, bx, 0);
-    grad.addColorStop(0, 'rgba(255,210,80,0.0)');
-    grad.addColorStop(1, 'rgba(255,210,80,0.10)');
+    grad.addColorStop(0, 'rgba(255,205,130,0.0)');
+    grad.addColorStop(1, 'rgba(255,205,130,0.08)');
     ctx.fillStyle = grad;
     ctx.fillRect(bx - 8, 0, 16, H);
   }
@@ -367,16 +449,16 @@ function drawBuildingRow(ctx, W, H, baseY, fillCss, alpha, minH, maxH, lit) {
     ctx.fillRect(x, top, bw, bh + (H - baseY));
 
     if (lit) {
-      // lit windows grid
+      // lit windows grid — overwhelmingly warm interior light
       const cols = Math.max(1, Math.floor(bw / 8));
       const rows = Math.max(1, Math.floor(bh / 10));
       for (let r = 0; r < rows; r++) {
         for (let cI = 0; cI < cols; cI++) {
-          if (Math.random() < 0.42) {
+          if (Math.random() < 0.38) {
             const warm = Math.random();
-            ctx.fillStyle = warm < 0.7
-              ? 'rgba(255,214,120,0.9)'
-              : (warm < 0.85 ? 'rgba(120,224,255,0.85)' : 'rgba(255,90,200,0.85)');
+            ctx.fillStyle = warm < 0.88
+              ? 'rgba(255,212,140,0.9)'
+              : 'rgba(200,220,255,0.7)'; // a few cool-white windows for variety
             ctx.fillRect(x + 3 + cI * 8, top + 4 + r * 10, 4, 5);
           }
         }
@@ -388,25 +470,28 @@ function drawBuildingRow(ctx, W, H, baseY, fillCss, alpha, minH, maxH, lit) {
 }
 
 // ----------------------------------------------------------------
-// neonMaterial(color, intensity) — cached emissive standard material
+// neonMaterial(color, intensity) — softly, warmly emissive accent material
+// (kept the name + signature; no longer a glaring neon tube)
 // ----------------------------------------------------------------
 const _neonMatCache = new Map();
 export function neonMaterial(color, intensity = 1.4) {
   const hex = toHex(color);
-  const key = `${colorKey(hex)}_${(+intensity).toFixed(2)}`;
+  // Cap the intensity low and warm the hue so this reads as a gentle gilded
+  // accent (cove glow, sign trim) rather than a hot neon tube.
+  const capped = THREE.MathUtils.clamp((+intensity) || 0, 0, 1.5) * 0.4;
+  const key = `${colorKey(hex)}_${capped.toFixed(3)}`;
   let m = _neonMatCache.get(key);
   if (m) return m;
-  // Slightly brighten the base color toward white so the tube reads as a hot
-  // light source, and push emissive a touch above the requested intensity for
-  // a crisper bloom under tone mapping.
-  const bright = new THREE.Color(hex).lerp(new THREE.Color(0xffffff), 0.12);
+  const warm = warmify(hex, 0.55);
+  const body = warm.clone().lerp(new THREE.Color(0xffffff), 0.18);
   m = new THREE.MeshStandardMaterial({
-    color: bright.getHex(),
-    emissive: hex,
-    emissiveIntensity: intensity * 1.25,
-    roughness: 0.2,
-    metalness: 0.0,
-    toneMapped: false, // let neon pop past the tone-map ceiling
+    color: body.getHex(),
+    emissive: warm.getHex(),
+    emissiveIntensity: capped,
+    roughness: 0.35,
+    metalness: 0.2,
+    // tone-mapped so it sits in the scene's warm exposure, no neon pop-through
+    toneMapped: true,
   });
   _neonMatCache.set(key, m);
   return m;
@@ -424,8 +509,12 @@ export function material(kind, floorDef) {
 
   switch (kind) {
     case 'carpet': {
+      // Warm, rich patterned carpet. The config carpet colors lean dark/cool
+      // on some floors; nudge toward classic burgundy/emerald so they read as
+      // upscale resort carpet rather than club blue.
+      const richCarpet = mixColor(carpetHex, 0x5a0d18, 0.35).getHex();
       const tex = cachedTexture('carpet_' + colorKey(carpetHex),
-        () => drawCarpetCanvas(carpetHex),
+        () => drawCarpetCanvas(richCarpet),
         (t) => {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
           t.repeat.set(20, 14);
@@ -436,19 +525,21 @@ export function material(kind, floorDef) {
       m = new THREE.MeshStandardMaterial({
         map: tex,
         bumpMap: tex,
-        bumpScale: 0.04,
+        bumpScale: 0.035,
         color: 0xffffff,
-        roughness: 0.96,
+        roughness: 0.97,
         metalness: 0.0,
       });
       break;
     }
     case 'marble': {
-      const tex = cachedTexture('marble_' + colorKey(toHex(COLORS.marble)),
-        () => drawMarbleCanvas(COLORS.marble),
+      // Cream/ivory veined marble — higher quality, subtle clearcoat polish.
+      const marbleHex = toHex(COLORS.marble);
+      const tex = cachedTexture('marble_' + colorKey(marbleHex),
+        () => drawMarbleCanvas(marbleHex),
         (t) => {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
-          t.repeat.set(6, 6);
+          t.repeat.set(5, 5);
           t.colorSpace = THREE.SRGBColorSpace;
           t.anisotropy = MAX_ANISO;
         });
@@ -456,80 +547,90 @@ export function material(kind, floorDef) {
         () => drawMarbleRoughCanvas(),
         (t) => {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
-          t.repeat.set(6, 6);
+          t.repeat.set(5, 5);
           t.anisotropy = MAX_ANISO;
         });
-      m = new THREE.MeshPhysicalMaterial({
+      m = new THREE.MeshStandardMaterial({
         map: tex,
         roughnessMap: rough,
-        color: 0xffffff,
-        roughness: 0.22,
+        color: 0xfbf6ea,
+        roughness: 0.3,
         metalness: 0.0,
-        clearcoat: 0.85,
-        clearcoatRoughness: 0.12,
-        envMapIntensity: 1.1,
-        reflectivity: 0.6,
+        envMapIntensity: 0.7,
       });
       break;
     }
     case 'wall': {
-      // deep tone derived from the floor carpet color, darkened & desaturated
-      const wallCol = mixColor(carpetHex, 0x140a10, 0.55);
-      m = new THREE.MeshStandardMaterial({ color: wallCol.getHex(), roughness: 0.85, metalness: 0.05 });
+      // Warm plaster wall — soft ivory/taupe, subtly tinted by the floor accent.
+      const wallCol = mixColor(0xe7dcc8, carpetHex, 0.12).lerp(new THREE.Color(WARM_HEX), 0.06);
+      m = new THREE.MeshStandardMaterial({ color: wallCol.getHex(), roughness: 0.92, metalness: 0.0 });
       break;
     }
     case 'ceiling': {
-      m = new THREE.MeshStandardMaterial({ color: 0x0b0a10, roughness: 0.95, metalness: 0.0 });
+      // Warm off-white coffered ceiling tone.
+      m = new THREE.MeshStandardMaterial({ color: 0xe3d7c2, roughness: 0.94, metalness: 0.0 });
       break;
     }
     case 'water': {
+      // Calm pool water — clear, gently reflective, lightly warm-lit.
       m = new THREE.MeshStandardMaterial({
         color: toHex(COLORS.water),
-        emissive: mixColor(COLORS.water, 0x000000, 0.6).getHex(),
-        emissiveIntensity: 0.25,
-        roughness: 0.12,
-        metalness: 0.4,
+        roughness: 0.14,
+        metalness: 0.2,
         transparent: true,
         opacity: 0.82,
+        envMapIntensity: 0.8,
       });
       break;
     }
     case 'glass': {
-      m = new THREE.MeshPhysicalMaterial({
-        color: 0xcfeeff,
-        roughness: 0.03,
+      // Clear architectural glass (cheap standard transparent — no transmission).
+      m = new THREE.MeshStandardMaterial({
+        color: 0xeef4f6,
+        roughness: 0.05,
         metalness: 0.0,
         transparent: true,
         opacity: 0.28,
-        transmission: 0.6,
-        ior: 1.45,
-        thickness: 0.4,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.03,
-        envMapIntensity: 1.4,
+        envMapIntensity: 1.0,
         side: THREE.DoubleSide,
       });
       break;
     }
     case 'brass': {
-      m = new THREE.MeshPhysicalMaterial({
+      // Brushed brass / gold — warm, satin metal.
+      m = new THREE.MeshStandardMaterial({
         color: toHex(COLORS.brass),
-        roughness: 0.26,
+        roughness: 0.34,
         metalness: 1.0,
-        clearcoat: 0.5,
-        clearcoatRoughness: 0.25,
-        envMapIntensity: 1.5,
-        emissive: mixColor(COLORS.brass, 0x000000, 0.7).getHex(),
-        emissiveIntensity: 0.08,
+        envMapIntensity: 1.1,
+        emissive: warmify(COLORS.brass, 0.5).lerp(new THREE.Color(0x000000), 0.7).getHex(),
+        emissiveIntensity: 0.05,
       });
       break;
     }
     case 'wood': {
-      m = new THREE.MeshStandardMaterial({ color: 0x5a3417, roughness: 0.6, metalness: 0.05 });
+      // Dark walnut / cherry hardwood with real grain.
+      const woodHex = 0x4a2417;
+      const tex = cachedTexture('wood_' + colorKey(woodHex),
+        () => drawWoodCanvas(woodHex),
+        (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.repeat.set(3, 3);
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.anisotropy = MAX_ANISO;
+        });
+      m = new THREE.MeshStandardMaterial({
+        map: tex,
+        bumpMap: tex,
+        bumpScale: 0.02,
+        color: 0xffffff,
+        roughness: 0.42,
+        metalness: 0.05,
+      });
       break;
     }
     default: {
-      m = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 0.8, metalness: 0.0 });
+      m = new THREE.MeshStandardMaterial({ color: 0xb8a88f, roughness: 0.8, metalness: 0.0 });
       break;
     }
   }
@@ -539,10 +640,12 @@ export function material(kind, floorDef) {
 
 // ----------------------------------------------------------------
 // addInteriorLighting(scene, floorDef) -> { update(dt), dispose() }
+// Warm (≈3200–4000K) ambient + hemisphere + soft warm downlights + key light.
+// Thin warm fog, NO saturated colored neon point lights. Bright & readable.
 // ----------------------------------------------------------------
 export function addInteriorLighting(scene, floorDef) {
   const added = [];
-  const neonLights = [];
+  const flickerLights = [];
   let prevFog = null;
   let prevFogStored = false;
 
@@ -552,47 +655,46 @@ export function addInteriorLighting(scene, floorDef) {
   }
 
   const theme = themeOf(floorDef);
-  const neonHex = toHex((floorDef && floorDef.neon) != null ? floorDef.neon : COLORS.neon);
-  const accentHex = toHex((floorDef && floorDef.accent) != null ? floorDef.accent : COLORS.gold);
 
-  // --- base ambient/hemispheric (warm) ---
-  const hemi = new THREE.HemisphereLight(0xfff1d6, 0x3a1820, 1.0);
+  // --- base ambient/hemispheric (warm ~3500K) ---
+  const hemi = new THREE.HemisphereLight(0xfff0d4, 0x6a5848, 0.95);
   scene.add(hemi); added.push(hemi);
 
-  const ambient = new THREE.AmbientLight(0xfff0dd, 0.72);
+  const ambient = new THREE.AmbientLight(0xffe8cc, 0.62);
   scene.add(ambient); added.push(ambient);
 
-  // --- soft directional "house" light from above ---
-  const dir = new THREE.DirectionalLight(0xfff4e2, 1.05);
-  dir.position.set(20, 60, 10);
-  scene.add(dir); added.push(dir);
-  if (dir.target) { scene.add(dir.target); added.push(dir.target); }
+  // --- gentle key light from above (soft warm "house" light) ---
+  const key = new THREE.DirectionalLight(0xfff2e0, 0.85);
+  key.position.set(24, 64, 16);
+  scene.add(key); added.push(key);
+  if (key.target) { scene.add(key.target); added.push(key.target); }
 
-  // --- cool rim/fill from the opposite side for depth & shape ---
-  const rim = new THREE.DirectionalLight(mixColor(neonHex, 0xffffff, 0.4).getHex(), 0.35);
-  rim.position.set(-30, 30, -40);
-  scene.add(rim); added.push(rim);
-  if (rim.target) { scene.add(rim.target); added.push(rim.target); }
+  // --- soft warm fill from the opposite side for depth & shape ---
+  const fill = new THREE.DirectionalLight(0xffe6c8, 0.3);
+  fill.position.set(-30, 34, -40);
+  scene.add(fill); added.push(fill);
+  if (fill.target) { scene.add(fill.target); added.push(fill.target); }
 
-  // --- 4 colored neon point lights tinted to neon/accent ---
-  const tints = [neonHex, accentHex, mixColor(neonHex, accentHex, 0.5).getHex(), neonHex];
-  // spread roughly across the floor footprint (X[-60,60], Z[-42,42])
+  // --- several soft warm downlight point lights (recessed-ceiling feel) ---
+  // All warm white/amber — never saturated color. Spread across the footprint
+  // (X[-60,60], Z[-42,42]) and kept bright so the floor reads clearly.
+  // Kept to 3 warm downlights for performance (per-light cost is high with
+  // many PBR surfaces); ambient + hemi + key/fill carry the base brightness.
+  const downColors = [0xffe7c2, 0xffeccb, 0xffe2b8];
   const spots = [
-    { x: -38, z: -24 },
-    { x: 40, z: -22 },
-    { x: -34, z: 26 },
+    { x: -36, z: -22 },
     { x: 36, z: 24 },
+    { x: 0, z: 0 },
   ];
-  const count = 4;
-  const baseI = 2.3;
-  for (let i = 0; i < count; i++) {
-    const pl = new THREE.PointLight(tints[i % tints.length], baseI, 105, 1.8);
-    pl.position.set(spots[i].x, 5.8, spots[i].z);
+  const baseI = 1.7;
+  for (let i = 0; i < spots.length; i++) {
+    const pl = new THREE.PointLight(downColors[i % downColors.length], baseI, 70, 2.0);
+    pl.position.set(spots[i].x, 6.4, spots[i].z);
     scene.add(pl); added.push(pl);
-    neonLights.push({ light: pl, base: baseI, phase: i * 1.7, speed: 0.8 + i * 0.15 });
+    flickerLights.push({ light: pl, base: baseI, phase: i * 1.3, speed: 0.35 + i * 0.04 });
   }
 
-  // --- subtle exponential fog tuned to theme ---
+  // --- thin warm fog tuned to theme (low density, keeps the floor bright) ---
   const fs = fogSettingsFor(theme);
   // store previous so dispose can restore (multiple floors may share one scene)
   prevFog = scene.fog || null;
@@ -603,9 +705,9 @@ export function addInteriorLighting(scene, floorDef) {
   function update(dt) {
     if (!(dt > 0)) dt = 0.016;
     t += dt;
-    for (const n of neonLights) {
-      // gentle pulse, stays bright enough to navigate
-      const pulse = 0.82 + 0.32 * Math.sin(t * n.speed + n.phase);
+    for (const n of flickerLights) {
+      // very gentle warm flicker, stays bright and steady for navigation
+      const pulse = 0.97 + 0.03 * Math.sin(t * n.speed + n.phase);
       n.light.intensity = n.base * pulse;
     }
   }
@@ -616,7 +718,7 @@ export function addInteriorLighting(scene, floorDef) {
       if (obj.dispose) { try { obj.dispose(); } catch (e) {} }
     }
     added.length = 0;
-    neonLights.length = 0;
+    flickerLights.length = 0;
     if (prevFogStored && scene.fog && scene.fog.isFogExp2) {
       // restore whatever was there before (or clear)
       scene.fog = prevFog;
@@ -628,6 +730,8 @@ export function addInteriorLighting(scene, floorDef) {
 
 // ----------------------------------------------------------------
 // makeNeonSign(text, color, opts) -> THREE.Object3D
+// Tasteful BACKLIT sign: a brushed metal/wood panel with warm-white/gold
+// edge-lit lettering and LOW emissive — no glowing tube halo.
 // ----------------------------------------------------------------
 export function makeNeonSign(text, color, opts = {}) {
   const group = new THREE.Object3D();
@@ -647,13 +751,13 @@ export function makeNeonSign(text, color, opts = {}) {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.needsUpdate = true;
 
-  // emissive plane (text glows). Use the canvas as emissive map; transparent so
-  // only the glyphs light up.
+  // Lettering plane: edge-lit text at LOW emissive intensity (backlit panel,
+  // not a glowing tube). Tone-mapped so it sits in the warm exposure.
   const signMat = new THREE.MeshStandardMaterial({
     color: 0x000000,
     emissive: 0xffffff,
     emissiveMap: tex,
-    emissiveIntensity: 1.6,
+    emissiveIntensity: 0.6,
     map: tex,
     transparent: true,
     side: THREE.DoubleSide,
@@ -664,25 +768,23 @@ export function makeNeonSign(text, color, opts = {}) {
   signMesh.position.z = 0.06;
   group.add(signMesh);
 
-  // dark backing panel slightly larger so the sign reads as a lit fixture
+  // brushed metal / wood backing panel slightly larger — the lit fixture body
   if (wantBacking) {
     const padX = 0.5 * size, padY = 0.4 * size;
     const backGeo = new THREE.PlaneGeometry(signW + padX, signH + padY);
     const backMat = new THREE.MeshStandardMaterial({
-      color: 0x0a0a0e,
-      roughness: 0.7,
-      metalness: 0.3,
-      emissive: hex,
-      emissiveIntensity: 0.05,
+      color: 0x2a1d12,            // dark walnut panel
+      roughness: 0.55,
+      metalness: 0.4,
       side: THREE.DoubleSide,
     });
     const back = new THREE.Mesh(backGeo, backMat);
     back.position.z = 0;
     group.add(back);
 
-    // thin neon trim frame (emissive border via 4 thin bars)
-    const trimMat = neonMaterial(hex, 1.3);
-    const tThick = 0.06 * size;
+    // slim brushed-brass trim frame (low warm emissive, not a neon tube)
+    const trimMat = neonMaterial(COLORS.brass, 0.5);
+    const tThick = 0.05 * size;
     const halfW = (signW + padX) / 2, halfH = (signH + padY) / 2;
     const barH = new THREE.PlaneGeometry(signW + padX, tThick);
     const barV = new THREE.PlaneGeometry(tThick, signH + padY);
@@ -693,10 +795,10 @@ export function makeNeonSign(text, color, opts = {}) {
     group.add(top, bot, lft, rgt);
   }
 
-  // faint point light in front for glow
+  // faint warm backlight glow in front (gentle, warm — not a colored neon pop)
   if (wantLight) {
-    const glow = new THREE.PointLight(hex, 0.8, 8 * size, 2.0);
-    glow.position.set(0, 0, 1.2 * size);
+    const glow = new THREE.PointLight(warmify(hex, 0.7).getHex(), 0.35, 6 * size, 2.0);
+    glow.position.set(0, 0, 0.9 * size);
     group.add(glow);
   }
 
@@ -706,7 +808,8 @@ export function makeNeonSign(text, color, opts = {}) {
 
 // ----------------------------------------------------------------
 // makeChandelier() -> THREE.Object3D
-// Shared geometry; instanced beads to keep poly count reasonable.
+// Opulent warm gold + crystal, soft warm light. Shared geometry; instanced
+// beads to keep poly count reasonable.
 // ----------------------------------------------------------------
 let _chandShared = null;
 function chandShared() {
@@ -719,21 +822,31 @@ function chandShared() {
     finialGeo: new THREE.SphereGeometry(0.12, 12, 10),
     beadGeo: new THREE.OctahedronGeometry(0.075, 0), // faceted crystal
     rodGeo: new THREE.CylinderGeometry(0.022, 0.022, 1.2, 8),
-    goldMat: neonMaterial(COLORS.gold, 1.1),
+    // real brushed-gold metal frame (not an emissive tube)
+    goldMat: new THREE.MeshPhysicalMaterial({
+      color: toHex(COLORS.gold),
+      roughness: 0.3,
+      metalness: 1.0,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.25,
+      envMapIntensity: 1.3,
+      emissive: warmify(COLORS.gold, 0.5).lerp(new THREE.Color(0x000000), 0.75).getHex(),
+      emissiveIntensity: 0.06,
+    }),
     crystalMat: new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
-      emissive: 0xfff0c0,
-      emissiveIntensity: 1.35,
-      roughness: 0.06,
+      color: 0xfffaf0,
+      emissive: 0xffe6b8,           // warm candle-like glow
+      emissiveIntensity: 0.5,        // soft, not glaring
+      roughness: 0.05,
       metalness: 0.0,
-      transmission: 0.5,
+      transmission: 0.6,
       ior: 1.5,
       thickness: 0.2,
       clearcoat: 1.0,
-      clearcoatRoughness: 0.05,
+      clearcoatRoughness: 0.04,
       transparent: true,
       opacity: 0.92,
-      envMapIntensity: 1.6,
+      envMapIntensity: 1.4,
     }),
   };
   return _chandShared;
@@ -803,8 +916,8 @@ export function makeChandelier() {
   beads.instanceMatrix.needsUpdate = true;
   group.add(beads);
 
-  // soft warm point light (warmer + brighter for opulence)
-  const light = new THREE.PointLight(0xffdfa0, 1.4, 34, 2.0);
+  // soft warm point light (candle-warm, opulent but gentle)
+  const light = new THREE.PointLight(0xffd9a0, 1.1, 30, 2.0);
   light.position.y = -0.1;
   group.add(light);
 
@@ -814,7 +927,7 @@ export function makeChandelier() {
 
 // ----------------------------------------------------------------
 // makeWindowSkyline() -> THREE.Object3D
-// Wide dark backdrop quad of a Vegas night skyline with glowing windows.
+// Wide backdrop quad of a realistic dusk/night skyline (warm window lights).
 // ----------------------------------------------------------------
 let _skylineTex = null;
 let _skylineMat = null;
@@ -825,12 +938,13 @@ function skylineMaterial() {
     t.wrapS = THREE.ClampToEdgeWrapping;
     t.wrapT = THREE.ClampToEdgeWrapping;
   });
-  // Emissive so it glows on its own behind the windows regardless of interior light.
+  // Emissive so it glows on its own behind the windows regardless of interior
+  // light, but at a restrained intensity for a realistic dusk read.
   _skylineMat = new THREE.MeshStandardMaterial({
     color: 0x000000,
     emissive: 0xffffff,
     emissiveMap: _skylineTex,
-    emissiveIntensity: 1.0,
+    emissiveIntensity: 0.85,
     roughness: 1.0,
     metalness: 0.0,
     fog: false,
@@ -849,36 +963,37 @@ export function makeWindowSkyline() {
 
 // ----------------------------------------------------------------
 // installEnvironment(renderer, scene) -> THREE.Texture | null
-// Build a small PMREM environment from a procedural gradient "room" so that
-// marble / brass / glass pick up real reflections. Fully guarded: returns null
-// and is a no-op on any failure. The generated env map is cached and reused
-// across calls (and across scenes) so this is cheap to call repeatedly.
+// Build a small PMREM environment from a procedural warm-interior "room" so
+// that marble / brass / glass pick up real reflections. Fully guarded:
+// returns null and is a no-op on any failure. The generated env map is cached
+// and reused across calls (and across scenes) so this is cheap to call.
 // ----------------------------------------------------------------
 let _envTexture = null;
 let _envTried = false;
 
 // Procedural equirect-ish gradient canvas used as the PMREM source. A warm
-// Vegas glow up top fading to a darker floor, with a couple of soft light pools
-// to give metals/marble something to reflect.
+// resort interior: soft ivory ceiling glow up top fading to a warm floor, with
+// a couple of gentle warm light pools to give metals/marble something to
+// reflect. No saturated cyan/magenta highlights.
 function drawEnvCanvas() {
   const W = 512, H = 256;
   const c = newCanvas(W, H);
   const ctx = c.getContext('2d');
   if (!ctx) return c;
   const sky = ctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0.0, '#2a2030'); // upper warm-violet ambience
-  sky.addColorStop(0.45, '#3a2a3a');
-  sky.addColorStop(0.6, '#54402f'); // warm horizon band (gilded glow)
-  sky.addColorStop(0.75, '#241820');
-  sky.addColorStop(1.0, '#0a0810'); // dark floor
+  sky.addColorStop(0.0, '#efe4cf'); // bright warm ceiling
+  sky.addColorStop(0.45, '#d8c4a4');
+  sky.addColorStop(0.6, '#c2a374');  // gilded horizon band
+  sky.addColorStop(0.78, '#7a6044');
+  sky.addColorStop(1.0, '#3a2c20'); // warm floor
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
 
-  // soft bright light pools near the horizon for specular highlights
+  // soft warm light pools near the horizon for specular highlights
   const pools = [
-    { x: W * 0.22, y: H * 0.52, r: 70, col: 'rgba(255,225,170,0.55)' },
-    { x: W * 0.62, y: H * 0.5, r: 90, col: 'rgba(255,120,210,0.30)' },
-    { x: W * 0.85, y: H * 0.55, r: 60, col: 'rgba(120,224,255,0.28)' },
+    { x: W * 0.22, y: H * 0.5, r: 80, col: 'rgba(255,236,200,0.5)' },
+    { x: W * 0.6, y: H * 0.48, r: 95, col: 'rgba(255,224,170,0.4)' },
+    { x: W * 0.85, y: H * 0.52, r: 70, col: 'rgba(255,242,215,0.4)' },
   ];
   for (const p of pools) {
     const g = ctx.createRadialGradient(p.x, p.y, 1, p.x, p.y, p.r);

@@ -13,7 +13,7 @@ const STORAGE_KEY = 'dc_settings';
 
 const DEFAULTS = {
   volume: 0.7,
-  bloom: true,
+  bloom: false,
   minimap: true,
   fov: 72,
   sensitivity: 1,
@@ -199,7 +199,7 @@ const Settings = {
       body.appendChild(makeSlider('sensitivity', 'Mouse Sensitivity', 0.3, 2, 0.05,
         (v) => Number(v).toFixed(2) + '×'));
 
-      body.appendChild(makeToggle('bloom', 'Bloom', 'Neon glow post-processing'));
+      body.appendChild(makeToggle('bloom', 'Bloom', 'Soft highlight glow (off = faster)'));
       body.appendChild(makeToggle('minimap', 'Minimap', 'Radar overlay'));
       body.appendChild(makeToggle('crowd', 'Crowd', 'NPC patrons'));
 

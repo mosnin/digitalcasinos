@@ -88,8 +88,17 @@ export function parcelKey(floor, ti, tj) { return `${floor}_${ti}_${tj}`; }
 
 function inRect(x, z, r) { return x >= r[0] && x <= r[2] && z >= r[1] && z <= r[3]; }
 
+// Aisles: every Nth tile row/column is a walkable hallway between parcel blocks,
+// so the casino floor reads like real banks of machines separated by aisles.
+export const AISLE = { period: 3, offset: 2 };
+export function isAisleTile(ti, tj) {
+  return (((ti % AISLE.period) + AISLE.period) % AISLE.period === AISLE.offset)
+      || (((tj % AISLE.period) + AISLE.period) % AISLE.period === AISLE.offset);
+}
+
 export function isBuildableTile(floorIndex, ti, tj) {
   const f = FLOORS[floorIndex]; if (!f) return false;
+  if (isAisleTile(ti, tj)) return false;            // keep aisles clear (walkable hallways)
   const c = tileCenter(ti, tj);
   const inHall = f.halls.some(h => inRect(c.x, c.z, h));
   if (!inHall) return false;

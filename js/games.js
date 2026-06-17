@@ -89,134 +89,238 @@ function makeTextTexture(text, { bg = '#0a0420', fg = '#ffd23f', size = 256, fon
   }
 }
 
-// Colors pulled from the shared palette.
+// Colors pulled from the shared palette. Warm, classy casino-resort
+// materials: walnut/cherry wood, deep felt, brushed brass, leather.
 const C = {
   felt: 0x0c6b3f,
   feltDark: 0x0a5233,
   wood: 0x3a2418,
   woodLight: 0x5a3a22,
+  woodWarm: 0x6b4525,      // lighter walnut highlight for rails/trim
   gold: COLORS.gold,
   brass: COLORS.brass,
-  red: 0xc0392b,
-  black: 0x141414,
+  red: 0xa01f1f,
+  black: 0x161616,
   green: 0x1f6e4a,
   chrome: 0xb8c0c8,
+  leather: 0x3b2a1c,       // padded rail leather (warm dark tan)
+  plastic: 0x1a1614,       // dark machine-plastic body
+  ivory: 0xf2ead8,         // cards / accents
   neon: COLORS.neon,
   neon2: COLORS.neon2,
 };
+
+// Small chamfered-corner box geometry for less-boxy cabinet panels.
+// Cheap to build (a few extra tris) and shared via the geo() cache.
+function beveledBox(w, h, d, bevel = 0.04) {
+  const b = Math.min(bevel, w / 2, h / 2, d / 2);
+  const shape = new THREE.Shape();
+  const hw = w / 2, hh = h / 2;
+  shape.moveTo(-hw + b, -hh);
+  shape.lineTo(hw - b, -hh);
+  shape.quadraticCurveTo(hw, -hh, hw, -hh + b);
+  shape.lineTo(hw, hh - b);
+  shape.quadraticCurveTo(hw, hh, hw - b, hh);
+  shape.lineTo(-hw + b, hh);
+  shape.quadraticCurveTo(-hw, hh, -hw, hh - b);
+  shape.lineTo(-hw, -hh + b);
+  shape.quadraticCurveTo(-hw, -hh, -hw + b, -hh);
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: d, bevelEnabled: true, bevelThickness: b, bevelSize: b,
+    bevelSegments: 2, steps: 1,
+  });
+  g.translate(0, 0, -d / 2);
+  return g;
+}
 
 // =============================================================
 // 3D PROPS
 // =============================================================
 
 // ---- Slot machine cabinet -------------------------------------------------
+// A rounded, real-feeling slot cabinet: dark-plastic/walnut body with a
+// curved crown, a brass-trimmed screen at low emissive, a button deck, a
+// coin tray and a chromed side lever.
 function buildSlots() {
   const g = new THREE.Group();
-  const bodyMat = mat(0x8a1430, { rough: 0.5, metal: 0.3 });
-  const trimMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.35 });
-  const darkMat = mat(0x101018, { rough: 0.7 });
+  const bodyMat = mat(C.plastic, { rough: 0.55, metal: 0.15 });          // dark machine plastic
+  const woodMat = mat(C.wood, { rough: 0.6, metal: 0.05 });              // walnut accents
+  const brassMat = mat(C.brass, { rough: 0.35, metal: 0.85, emissive: C.brass, emIntensity: 0.04 });
+  const darkMat = mat(0x0e0c0b, { rough: 0.7 });
+  const deckMat = mat(0x241d18, { rough: 0.6, metal: 0.1 });
 
-  // Cabinet body (tall box), feet at y=0.
-  const W = 1.1, D = 0.9, H = 2.2;
-  g.add(box(bodyMat, W, H, D, 0, H / 2, 0));
-  // Slanted control deck below the screen.
-  const deck = box(bodyMat, W, 0.5, 0.5, 0, 1.05, D / 2 - 0.05);
-  deck.rotation.x = -0.5;
-  g.add(deck);
+  const W = 1.1, D = 0.9, H = 2.05;
+  const front = D / 2;
 
-  // Emissive screen showing 3 symbols.
+  // Chamfered cabinet body so it doesn't read as a plain cube.
+  const bodyGeo = geo('slotBody', () => beveledBox(W, H - 0.5, D, 0.06));
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.set(0, (H - 0.5) / 2 + 0.04, 0);
+  g.add(body);
+
+  // Walnut base plinth + brass kick strip.
+  g.add(box(woodMat, W + 0.06, 0.16, D + 0.06, 0, 0.08, 0));
+  g.add(box(brassMat, W + 0.07, 0.02, D + 0.07, 0, 0.17, 0));
+
+  // Curved crown: a half-cylinder cap lying across the top of the cabinet.
+  const crownGeo = geo('slotCrown', () => new THREE.CylinderGeometry(0.42, 0.42, W, 20, 1, false, 0, Math.PI));
+  const crown = new THREE.Mesh(crownGeo, bodyMat);
+  crown.rotation.z = Math.PI / 2;
+  crown.position.set(0, H - 0.46, -0.02);
+  crown.scale.set(1, 1, 0.62); // flatten front-to-back into a low dome
+  g.add(crown);
+  // Brass band wrapping the crown front edge.
+  g.add(box(brassMat, W + 0.02, 0.05, 0.06, 0, H - 0.46, front - 0.16));
+
+  // Backlit top sign panel (warm, low emissive — no neon glow).
+  const signTex = makeTextTexture('LUCKY 7', { bg: '#1a1208', fg: '#f4d28a', font: 'bold 64px serif', size: 256 });
+  const signMat = signTex
+    ? new THREE.MeshStandardMaterial({ map: signTex, emissive: 0xffffff, emissiveMap: signTex, emissiveIntensity: 0.25, roughness: 0.5 })
+    : mat(0xf4d28a, { emissive: 0xf4d28a, emIntensity: 0.2 });
+  g.add(box(signMat, 0.86, 0.3, 0.03, 0, H - 0.46, front - 0.12));
+  // Brass frame around the sign.
+  g.add(box(brassMat, 0.92, 0.04, 0.05, 0, H - 0.30, front - 0.13));
+  g.add(box(brassMat, 0.92, 0.04, 0.05, 0, H - 0.62, front - 0.13));
+
+  // Recessed screen bezel + glass + reel symbols (realistic low emissive).
+  const screenY = 1.5;
+  g.add(box(darkMat, 0.96, 0.66, 0.04, 0, screenY, front - 0.05)); // bezel recess
   const screenMat = new THREE.MeshStandardMaterial({
-    color: 0x05050c, emissive: 0x4060ff, emissiveIntensity: 0.6, roughness: 0.3,
+    color: 0x0b0d10, emissive: 0x223044, emissiveIntensity: 0.12, roughness: 0.25, metalness: 0.1,
   });
-  g.add(box(screenMat, 0.92, 0.62, 0.06, 0, 1.62, D / 2 - 0.02));
+  g.add(box(screenMat, 0.86, 0.56, 0.02, 0, screenY, front - 0.03)); // glass
 
-  // Three symbol panels on the glowing screen.
-  const syms = ['7', '7', '7'];
+  // Three reel windows with symbols on the glass (soft, not glaring).
   for (let i = 0; i < 3; i++) {
-    const tex = makeTextTexture(syms[i], { bg: '#100a20', fg: '#ffd23f', font: 'bold 150px sans-serif' });
+    const tex = makeTextTexture('7', { bg: '#f4efe2', fg: '#a01f1f', font: 'bold 170px serif' });
     const symMat = tex
-      ? new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.5, roughness: 0.4 })
-      : mat(C.gold, { emissive: C.gold, emIntensity: 0.5 });
-    g.add(box(symMat, 0.26, 0.42, 0.02, (i - 1) * 0.30, 1.62, D / 2 + 0.02));
+      ? new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.15, roughness: 0.5 })
+      : mat(C.red, { emissive: C.red, emIntensity: 0.12 });
+    g.add(box(symMat, 0.24, 0.46, 0.01, (i - 1) * 0.29, screenY, front - 0.015));
+    // Brass reel dividers.
+    if (i < 2) g.add(box(brassMat, 0.012, 0.5, 0.02, (i - 0.5) * 0.29, screenY, front - 0.018));
+  }
+  // Brass frame around the screen.
+  g.add(box(brassMat, 0.98, 0.04, 0.05, 0, screenY + 0.35, front - 0.03));
+  g.add(box(brassMat, 0.98, 0.04, 0.05, 0, screenY - 0.35, front - 0.03));
+
+  // Slanted button deck below the screen.
+  const deck = box(deckMat, 1.0, 0.5, 0.42, 0, 1.02, front - 0.04);
+  deck.rotation.x = -0.55;
+  g.add(deck);
+  // Round play buttons across the deck.
+  const btnCols = [0xc0392b, 0xe0a030, 0x2f8f4f, 0x3060c0];
+  for (let i = 0; i < 4; i++) {
+    const b = cyl(mat(btnCols[i], { rough: 0.4, metal: 0.2, emissive: btnCols[i], emIntensity: 0.08 }),
+      0.05, 0.04, (i - 1.5) * 0.2, 1.18, front + 0.16);
+    b.rotation.x = -0.55;
+    g.add(b);
   }
 
-  // Trim frame around the screen.
-  g.add(box(trimMat, 1.0, 0.07, 0.05, 0, 1.94, D / 2 - 0.01));
-  g.add(box(trimMat, 1.0, 0.07, 0.05, 0, 1.30, D / 2 - 0.01));
-
-  // Glowing top sign.
-  const signMat = new THREE.MeshStandardMaterial({
-    color: 0x12001a, emissive: C.neon, emissiveIntensity: 1.2, roughness: 0.4,
-  });
-  g.add(box(signMat, 1.15, 0.34, 0.18, 0, 2.32, 0));
-  g.add(box(trimMat, 1.18, 0.05, 0.20, 0, 2.50, 0));
-
-  // Side lever (arm + ball knob).
+  // Side lever: chromed arm with a red ball knob.
   const lever = new THREE.Group();
-  lever.position.set(W / 2 + 0.02, 1.5, 0.1);
-  lever.add(cyl(mat(C.chrome, { metal: 0.8, rough: 0.25 }), 0.035, 0.6, 0, 0.3, 0));
-  lever.add(cyl(mat(0xd02020, { rough: 0.3, metal: 0.4, emissive: 0xd02020, emIntensity: 0.3 }), 0.09, 0.18, 0, 0.66, 0));
-  lever.rotation.z = -0.25;
+  lever.position.set(W / 2 + 0.04, 1.45, 0.05);
+  lever.add(cyl(mat(C.chrome, { metal: 0.85, rough: 0.2 }), 0.03, 0.55, 0, 0.28, 0));
+  lever.add(cyl(brassMat, 0.05, 0.06, 0, 0.02, 0)); // base boss
+  lever.add(cyl(mat(0xc0392b, { rough: 0.3, metal: 0.3 }), 0.085, 0.17, 0, 0.6, 0));
+  lever.rotation.z = -0.22;
   g.add(lever);
 
-  // Coin tray at the bottom.
-  g.add(box(darkMat, 0.95, 0.16, 0.22, 0, 0.42, D / 2 + 0.02));
-  g.add(box(trimMat, 0.95, 0.03, 0.04, 0, 0.50, D / 2 + 0.13));
+  // Coin tray + brass lip at the bottom.
+  g.add(box(darkMat, 0.9, 0.18, 0.24, 0, 0.4, front + 0.02));
+  g.add(box(brassMat, 0.9, 0.03, 0.04, 0, 0.49, front + 0.13));
 
   return g;
 }
 
 // ---- Roulette table -------------------------------------------------------
+// A real wood-railed roulette table: oval-ish felt bed with a polished
+// walnut rail, a proper recessed wheel (alternating red/black numbered
+// pockets, frets, center cone) and a printed felt betting layout.
 function buildRoulette() {
   const g = new THREE.Group();
-  const feltMat = mat(C.felt, { rough: 0.85, emissive: C.green, emIntensity: 0.08 });
-  const woodMat = mat(C.wood, { rough: 0.6, metal: 0.1 });
-  const goldMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.25 });
+  const feltMat = mat(C.felt, { rough: 0.92, metal: 0 });
+  const woodMat = mat(C.wood, { rough: 0.5, metal: 0.1 });
+  const railMat = mat(C.woodWarm, { rough: 0.35, metal: 0.15 }); // polished rail
+  const brassMat = mat(C.brass, { rough: 0.35, metal: 0.85, emissive: C.brass, emIntensity: 0.03 });
 
-  // Round table top + skirt + pedestal.
-  const topY = 0.95, R = 1.5;
-  g.add(cyl(feltMat, R, 0.12, 0, topY, 0));
-  g.add(cyl(woodMat, R + 0.06, 0.18, 0, topY - 0.14, 0)); // rim
-  g.add(cyl(woodMat, 0.45, topY - 0.2, 0, (topY - 0.2) / 2, 0)); // pedestal
-  g.add(cyl(woodMat, 0.7, 0.08, 0, 0.04, 0)); // base
+  const topY = 0.95;
+  // Rounded rectangular felt bed (rounded via beveled box).
+  const bedGeo = geo('rouletteBed', () => beveledBox(2.6, 0.1, 1.7, 0.25));
+  const bed = new THREE.Mesh(bedGeo, feltMat);
+  bed.rotation.x = -Math.PI / 2;
+  bed.position.y = topY;
+  g.add(bed);
+  // Polished wood rail ring around the felt.
+  const railGeo = geo('rouletteRail', () => new THREE.TorusGeometry(1.0, 0.075, 12, 48));
+  const rail = new THREE.Mesh(railGeo, railMat);
+  rail.rotation.x = Math.PI / 2;
+  rail.position.y = topY + 0.04;
+  rail.scale.set(1.32, 0.86, 1);
+  g.add(rail);
+  // Apron skirt + pedestal + base.
+  g.add(box(woodMat, 2.5, 0.5, 1.6, 0, topY - 0.32, 0));
+  g.add(cyl(woodMat, 0.4, topY - 0.55, 0, (topY - 0.55) / 2 + 0.02, 0));
+  g.add(cyl(woodMat, 0.62, 0.07, 0, 0.035, 0));
 
-  // Spinning-looking wheel: a bowl + a hub + colored number pockets.
+  // ---- Wheel assembly (sits on the -X end of the bed) ----
   const wheel = new THREE.Group();
-  wheel.position.set(-0.55, topY + 0.07, 0);
-  wheel.add(cyl(woodMat, 0.62, 0.1, 0, 0, 0));            // wheel base
-  wheel.add(cyl(mat(0x05050c, { rough: 0.4 }), 0.5, 0.06, 0, 0.06, 0)); // recess
-  wheel.add(cyl(goldMat, 0.12, 0.14, 0, 0.1, 0));          // center hub
-  // Number pockets as alternating colored segments around the rim.
-  const pocketGeo = geo('roulettePocket', () => new THREE.BoxGeometry(0.12, 0.05, 0.18));
-  const segCount = 24;
-  for (let i = 0; i < segCount; i++) {
-    const a = (i / segCount) * Math.PI * 2;
-    const isGreen = i === 0;
-    const colMat = isGreen ? mat(C.green, { rough: 0.5 })
-      : (i % 2 === 0 ? mat(C.red, { rough: 0.5 }) : mat(C.black, { rough: 0.5 }));
+  wheel.position.set(-0.78, topY + 0.06, 0);
+  // Outer wood bowl + brass rim.
+  wheel.add(cyl(woodMat, 0.6, 0.12, 0, 0, 0));
+  wheel.add(cyl(brassMat, 0.6, 0.02, 0, 0.07, 0));
+  wheel.add(cyl(mat(0x100d0a, { rough: 0.5 }), 0.5, 0.07, 0, 0.05, 0)); // dark ball track
+  // Spinning head (pockets + cone) — exposed as userData.spin.
+  const head = new THREE.Group();
+  head.position.y = 0.06;
+  head.add(cyl(woodMat, 0.46, 0.05, 0, 0.02, 0)); // pocket disc
+  // 37 alternating numbered pockets with thin brass frets between them.
+  const pocketGeo = geo('roulettePocket', () => new THREE.BoxGeometry(0.07, 0.04, 0.13));
+  const fretGeo = geo('rouletteFret', () => new THREE.BoxGeometry(0.012, 0.05, 0.14));
+  const seg = 37;
+  for (let i = 0; i < seg; i++) {
+    const a = (i / seg) * Math.PI * 2;
+    const colMat = i === 0 ? mat(C.green, { rough: 0.55 })
+      : (i % 2 === 0 ? mat(C.red, { rough: 0.55 }) : mat(C.black, { rough: 0.6 }));
     const p = new THREE.Mesh(pocketGeo, colMat);
-    p.position.set(Math.cos(a) * 0.42, 0.08, Math.sin(a) * 0.42);
+    p.position.set(Math.cos(a) * 0.38, 0.05, Math.sin(a) * 0.38);
     p.rotation.y = -a;
-    wheel.add(p);
+    head.add(p);
+    const fa = ((i + 0.5) / seg) * Math.PI * 2;
+    const fr = new THREE.Mesh(fretGeo, brassMat);
+    fr.position.set(Math.cos(fa) * 0.38, 0.055, Math.sin(fa) * 0.38);
+    fr.rotation.y = -fa;
+    head.add(fr);
   }
-  // A little spinner ball.
-  wheel.add(cyl(mat(0xf0f0f0, { rough: 0.3, metal: 0.4 }), 0.04, 0.04, 0.36, 0.12, 0.18));
+  // Center cone (turret): stacked brass cone + ball-spinner cross.
+  head.add(cyl(brassMat, 0.16, 0.06, 0, 0.06, 0));
+  const coneGeo = geo('rouletteCone', () => new THREE.ConeGeometry(0.13, 0.26, 16));
+  const cone = new THREE.Mesh(coneGeo, brassMat);
+  cone.position.y = 0.22;
+  head.add(cone);
+  head.add(cyl(mat(C.chrome, { metal: 0.85, rough: 0.2 }), 0.025, 0.12, 0, 0.4, 0));
+  wheel.add(head);
+  // A little ivory ball resting in the track.
+  wheel.add(cyl(mat(0xf2ead8, { rough: 0.3, metal: 0.1 }), 0.03, 0.03, 0.44, 0.09, 0.12));
   g.add(wheel);
-  // Spin animation handle for parcels.js update loop (optional).
-  g.userData.spin = wheel;
+  g.userData.spin = head; // animation handle for the update loop
 
-  // Felt betting layout on the +X side: a grid of small colored cells.
+  // ---- Felt betting layout on the +X side ----
   const layout = new THREE.Group();
-  layout.position.set(0.7, topY + 0.061, 0);
-  const cellGeo = geo('rouletteCell', () => new THREE.BoxGeometry(0.16, 0.01, 0.16));
+  layout.position.set(0.55, topY + 0.052, 0);
+  const cellGeo = geo('rouletteCell', () => new THREE.BoxGeometry(0.15, 0.008, 0.18));
+  const lineMat = mat(0xe8e0cf, { rough: 0.7 }); // printed white grid lines
   for (let r = 0; r < 3; r++) {
-    for (let cI = 0; cI < 4; cI++) {
+    for (let cI = 0; cI < 6; cI++) {
       const isRed = (r + cI) % 2 === 0;
-      const cell = new THREE.Mesh(cellGeo, isRed ? mat(C.red, { rough: 0.8 }) : mat(C.black, { rough: 0.8 }));
-      cell.position.set(cI * 0.19 - 0.3, 0, r * 0.19 - 0.19);
+      const cell = new THREE.Mesh(cellGeo, isRed ? mat(C.red, { rough: 0.85 }) : mat(C.black, { rough: 0.85 }));
+      cell.position.set(cI * 0.17 - 0.42, 0, r * 0.19 - 0.19);
       layout.add(cell);
     }
   }
+  // Thin grid border lines for the printed-felt look.
+  layout.add(box(lineMat, 1.05, 0.004, 0.01, -0.0, 0.006, -0.3));
+  layout.add(box(lineMat, 1.05, 0.004, 0.01, -0.0, 0.006, 0.3));
   g.add(layout);
 
   return g;
@@ -225,53 +329,77 @@ function buildRoulette() {
 // ---- Blackjack table ------------------------------------------------------
 function buildBlackjack(withDealer = true) {
   const g = new THREE.Group();
-  const feltMat = mat(C.feltDark, { rough: 0.85, emissive: C.green, emIntensity: 0.06 });
-  const woodMat = mat(C.wood, { rough: 0.6 });
-  const goldMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.2 });
+  const feltMat = mat(C.feltDark, { rough: 0.92, metal: 0 });
+  const woodMat = mat(C.wood, { rough: 0.5, metal: 0.1 });
+  const leatherMat = mat(C.leather, { rough: 0.45, metal: 0.05 }); // padded rail
+  const brassMat = mat(C.brass, { rough: 0.35, metal: 0.85, emissive: C.brass, emIntensity: 0.03 });
+  const lineMat = mat(0xe8d9a8, { rough: 0.7 }); // printed felt lettering arc
 
-  // Half-moon top: a half cylinder (use a half-circle by clamping a cylinder
-  // and pushing it back so the flat dealer edge faces -Z).
+  // Half-moon top: a half cylinder, flat dealer edge toward -Z.
   const topY = 0.95;
-  const halfGeo = geo('bjTop', () => new THREE.CylinderGeometry(1.7, 1.7, 0.12, 32, 1, false, 0, Math.PI));
+  const halfGeo = geo('bjTop', () => new THREE.CylinderGeometry(1.6, 1.6, 0.1, 40, 1, false, 0, Math.PI));
   const top = new THREE.Mesh(halfGeo, feltMat);
   top.position.y = topY;
-  // Orient so the curved edge faces players (+Z), flat edge toward dealer.
   top.rotation.y = -Math.PI / 2;
   g.add(top);
-  // Wood rim under the felt.
-  const rimGeo = geo('bjRim', () => new THREE.CylinderGeometry(1.78, 1.78, 0.16, 32, 1, false, 0, Math.PI));
+  // Wood apron under the felt.
+  const rimGeo = geo('bjRim', () => new THREE.CylinderGeometry(1.66, 1.66, 0.34, 40, 1, false, 0, Math.PI));
   const rim = new THREE.Mesh(rimGeo, woodMat);
-  rim.position.y = topY - 0.13;
+  rim.position.y = topY - 0.22;
   rim.rotation.y = -Math.PI / 2;
   g.add(rim);
+
+  // Padded leather rail (rolled bumper) hugging the curved player edge.
+  const railGeo = geo('bjRail', () => new THREE.TorusGeometry(1.55, 0.07, 12, 48, Math.PI));
+  const railEdge = new THREE.Mesh(railGeo, leatherMat);
+  railEdge.position.y = topY + 0.05;
+  railEdge.rotation.x = Math.PI / 2;
+  railEdge.rotation.z = -Math.PI / 2; // sweep across the curved (+Z) side
+  g.add(railEdge);
+  // Brass nailhead trim line just inside the rail.
+  g.add(cyl(brassMat, 1.4, 0.012, 0, topY + 0.055, 0.15));
+
   // Legs.
-  const legMat = woodMat;
-  for (const [lx, lz] of [[-1.3, 0.4], [1.3, 0.4], [0, 1.4]]) {
-    g.add(cyl(legMat, 0.09, topY - 0.2, lx, (topY - 0.2) / 2, lz));
+  for (const [lx, lz] of [[-1.25, 0.35], [1.25, 0.35], [0, 1.3]]) {
+    g.add(cyl(woodMat, 0.08, topY - 0.4, lx, (topY - 0.4) / 2, lz));
   }
 
-  // Chip rack (a tray of colored chips) at the dealer's flat edge.
+  // Curved chip tray (arc of slotted colored chips) at the dealer edge.
   const rack = new THREE.Group();
-  rack.position.set(0, topY + 0.06, -0.7);
-  rack.add(box(woodMat, 0.9, 0.08, 0.22, 0, 0, 0));
-  const chipCols = [C.red, C.black, C.green, C.gold];
-  for (let i = 0; i < 4; i++) {
-    rack.add(cyl(mat(chipCols[i], { rough: 0.35, metal: 0.2, emissive: chipCols[i], emIntensity: 0.12 }), 0.08, 0.12, i * 0.22 - 0.33, 0.1, 0));
+  rack.position.set(0, topY + 0.05, -0.62);
+  rack.add(box(woodMat, 1.0, 0.07, 0.2, 0, 0, 0));
+  const chipCols = [C.red, C.black, C.green, C.gold, 0x3060c0];
+  for (let i = 0; i < 5; i++) {
+    const cm = mat(chipCols[i], { rough: 0.4, metal: 0.15 });
+    // short stack of 3 chips per slot
+    for (let k = 0; k < 3; k++) {
+      rack.add(cyl(cm, 0.075, 0.02, i * 0.2 - 0.4, 0.06 + k * 0.022, 0));
+    }
   }
   g.add(rack);
 
-  // A few card rects laid on the felt (player + dealer spots).
+  // Card shoe at the dealer's right.
+  const shoe = new THREE.Group();
+  shoe.position.set(0.85, topY + 0.06, -0.5);
+  shoe.add(box(mat(0x201712, { rough: 0.45, metal: 0.1 }), 0.26, 0.12, 0.34, 0, 0, 0));
+  const wedge = box(mat(0x2a1d15, { rough: 0.45 }), 0.26, 0.18, 0.16, 0, 0.07, 0.12);
+  wedge.rotation.x = -0.5;
+  shoe.add(wedge);
+  shoe.rotation.y = -0.3;
+  g.add(shoe);
+
+  // A few card rects dealt on the felt (player + dealer spots).
   const cardGeo = geo('cardRect', () => new THREE.BoxGeometry(0.18, 0.01, 0.26));
-  const cardMat = mat(0xf4f4f4, { rough: 0.5 });
-  for (const [cx, cz] of [[-0.3, 0.5], [-0.1, 0.5], [0.2, -0.2], [0.4, -0.2]]) {
+  const cardMat = mat(C.ivory, { rough: 0.5 });
+  for (const [cx, cz] of [[-0.4, 0.55], [-0.2, 0.55], [-0.15, -0.15], [0.05, -0.15]]) {
     const card = new THREE.Mesh(cardGeo, cardMat);
-    card.position.set(cx, topY + 0.07, cz);
+    card.position.set(cx, topY + 0.06, cz);
     card.rotation.y = Math.random() * 0.3 - 0.15;
     g.add(card);
   }
 
-  // Painted arc accent on the felt.
-  g.add(cyl(goldMat, 1.2, 0.005, 0, topY + 0.065, 0.2));
+  // Printed "INSURANCE PAYS 2 TO 1" arc accent on the felt.
+  g.add(cyl(lineMat, 1.05, 0.004, 0, topY + 0.052, 0.1));
 
   // Seat a dealer behind the flat edge (facing +Z toward players).
   if (withDealer) {
@@ -290,49 +418,60 @@ function buildBlackjack(withDealer = true) {
 // ---- Poker table ----------------------------------------------------------
 function buildPoker(withDealer = true) {
   const g = new THREE.Group();
-  const feltMat = mat(C.felt, { rough: 0.85, emissive: C.green, emIntensity: 0.08 });
-  const woodMat = mat(C.woodLight, { rough: 0.6 });
-  const railMat = mat(0x2a1a10, { rough: 0.5, metal: 0.2 });
-  const goldMat = mat(C.gold, { rough: 0.3, metal: 0.6, emissive: C.gold, emIntensity: 0.2 });
+  const feltMat = mat(C.felt, { rough: 0.92, metal: 0 });
+  const woodMat = mat(C.woodLight, { rough: 0.5, metal: 0.1 });
+  const railMat = mat(C.woodWarm, { rough: 0.3, metal: 0.2 }); // polished racetrack rail
+  const brassMat = mat(C.brass, { rough: 0.35, metal: 0.85, emissive: C.brass, emIntensity: 0.03 });
 
   // Oval top: a cylinder scaled on X to make an oval. Feet at y=0.
   const topY = 0.95;
-  const top = cyl(feltMat, 1.0, 0.12, 0, topY, 0);
-  top.scale.set(2.1, 0.12, 1.4);
+  const top = cyl(feltMat, 1.0, 0.1, 0, topY, 0);
+  top.scale.set(2.1, 0.1, 1.4);
   g.add(top);
-  // Padded rail (oval ring) — a thin torus scaled to the oval.
-  const railGeo = geo('pokerRail', () => new THREE.TorusGeometry(1.0, 0.1, 10, 40));
+  // Polished wooden racetrack rail (rolled oval ring).
+  const railGeo = geo('pokerRail', () => new THREE.TorusGeometry(1.0, 0.085, 14, 56));
   const rail = new THREE.Mesh(railGeo, railMat);
-  rail.position.y = topY + 0.06;
+  rail.position.y = topY + 0.05;
   rail.rotation.x = Math.PI / 2;
-  rail.scale.set(2.05, 1.38, 1);
+  rail.scale.set(2.08, 1.42, 1);
   g.add(rail);
-  // Skirt + pedestal.
-  const skirt = cyl(woodMat, 1.0, 0.5, 0, topY - 0.3, 0);
-  skirt.scale.set(1.9, 0.5, 1.25);
+  // Brass beading just inside the rail.
+  const beadGeo = geo('pokerBead', () => new THREE.TorusGeometry(1.0, 0.012, 8, 56));
+  const bead = new THREE.Mesh(beadGeo, brassMat);
+  bead.position.y = topY + 0.06;
+  bead.rotation.x = Math.PI / 2;
+  bead.scale.set(1.92, 1.28, 1);
+  g.add(bead);
+  // Apron skirt + pedestal + spreading base.
+  const skirt = cyl(woodMat, 1.0, 0.46, 0, topY - 0.28, 0);
+  skirt.scale.set(1.9, 0.46, 1.25);
   g.add(skirt);
-  g.add(box(woodMat, 0.6, topY - 0.4, 0.6, 0, (topY - 0.4) / 2, 0));
+  g.add(box(woodMat, 0.55, topY - 0.42, 0.55, 0, (topY - 0.42) / 2, 0));
+  g.add(box(woodMat, 1.2, 0.08, 0.5, 0, 0.04, 0));
 
   // 5 community card rects in a row at center.
   const cardGeo = geo('cardRect', () => new THREE.BoxGeometry(0.18, 0.01, 0.26));
-  const cardMat = mat(0xf4f4f4, { rough: 0.5 });
+  const cardMat = mat(C.ivory, { rough: 0.5 });
   for (let i = 0; i < 5; i++) {
     const card = new THREE.Mesh(cardGeo, cardMat);
-    card.position.set((i - 2) * 0.24, topY + 0.07, 0);
+    card.position.set((i - 2) * 0.24, topY + 0.06, 0);
     g.add(card);
   }
 
-  // Chip stacks scattered around the felt.
+  // Chip stacks at each player position around the felt.
   const chipCols = [C.red, C.black, C.green, C.gold, 0x3060c0];
   for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2;
-    const stackH = 0.06 + Math.random() * 0.1;
+    const a = (i / 5) * Math.PI * 2 + 0.4;
     const cc = chipCols[i % chipCols.length];
-    g.add(cyl(mat(cc, { rough: 0.35, metal: 0.2, emissive: cc, emIntensity: 0.12 }),
-      0.09, stackH, Math.cos(a) * 1.3, topY + 0.07 + stackH / 2, Math.sin(a) * 0.85));
+    const cm = mat(cc, { rough: 0.4, metal: 0.15 });
+    const px = Math.cos(a) * 1.4, pz = Math.sin(a) * 0.9;
+    const count = 3 + ((Math.random() * 4) | 0);
+    for (let k = 0; k < count; k++) {
+      g.add(cyl(cm, 0.075, 0.02, px, topY + 0.06 + k * 0.022, pz));
+    }
   }
-  // Gold dealer-button accent.
-  g.add(cyl(goldMat, 0.07, 0.03, 1.4, topY + 0.08, 0.4));
+  // White "dealer button" accent near a seat.
+  g.add(cyl(mat(C.ivory, { rough: 0.4 }), 0.06, 0.018, 1.45, topY + 0.065, 0.35));
 
   if (withDealer) {
     try {
@@ -367,7 +506,7 @@ export function createGameProp(type) {
   }
   if (!group) {
     group = new THREE.Group();
-    group.add(box(mat(C.neon, { emissive: C.neon, emIntensity: 0.5 }), 1, 1, 1, 0, 0.5, 0));
+    group.add(box(mat(C.woodLight, { rough: 0.6, metal: 0.1 }), 1, 1, 1, 0, 0.5, 0));
   }
   group.name = `game:${type}`;
   return group;

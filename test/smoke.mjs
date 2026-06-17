@@ -20,6 +20,8 @@ page.on('pageerror', (e) => errors.push('PAGEERROR: ' + (e && e.stack ? e.stack.
 await page.goto(URL, { waitUntil: 'networkidle', timeout: 45000 });
 await page.waitForTimeout(1500);
 
+// skip first-run onboarding/bonus so screenshots show the world
+await page.evaluate(() => { try { localStorage.setItem('dc_tutorial', 'done'); localStorage.setItem('dc_dailybonus', JSON.stringify({ date: new Date().toDateString(), streak: 1 })); } catch (e) {} });
 // enter the world
 await page.click('#playBtn').catch(() => {});
 await page.waitForTimeout(4000);

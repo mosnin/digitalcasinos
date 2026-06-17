@@ -17,7 +17,7 @@ import { createCasino } from './casino.js';
 import { attachParcels } from './parcels.js';
 import { NPCManager } from './characters.js';
 import { Player } from './player.js';
-import { openGame, openGameEditor } from './games.js';
+import { openGame, openGameEditor, createGameProp } from './games.js';
 import { openShop, openDecorStore } from './shops.js';
 import { openSkinShop } from './skins.js';
 import { initAuth, signOut } from './auth.js';
@@ -57,7 +57,7 @@ const qmark = (n, c) => { try { Quests.mark(n, c); } catch (e) {} };
 
 // ---- renderer / camera ----
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -68,9 +68,13 @@ document.body.appendChild(renderer.domElement);
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 800);
 const clock = new THREE.Clock();
 const scenePlaceholder = new THREE.Scene();
-const postfx = createPostFX(renderer, scenePlaceholder, camera, { strength: 0.7, radius: 0.5, threshold: 0.85 });
-const perf = createPerfGovernor(renderer, { min: 0.75 });
+// Subtle, realistic bloom only on the brightest highlights (no neon-glow look).
+const postfx = createPostFX(renderer, scenePlaceholder, camera, { strength: 0.18, radius: 0.35, threshold: 0.92 });
+const perf = createPerfGovernor(renderer, { min: 0.6 });
 let lastPR = renderer.getPixelRatio();
+// Bloom existed mainly for the (now removed) neon glow — keep it off by default
+// for performance + the classy look. Players can re-enable it in Settings.
+try { postfx.setEnabled(false); } catch (e) {}
 
 const _euler = new THREE.Euler();
 function camYaw() { _euler.setFromQuaternion(camera.quaternion, 'YXZ'); return _euler.y; }
@@ -80,7 +84,7 @@ UI.init();
 Minimap.init();
 Notify.init();
 Music.init();
-const NPC_PER_FLOOR = 12;
+const NPC_PER_FLOOR = 6;
 let crowdOn = true;
 
 const player = new Player({ camera, domElement: renderer.domElement });
@@ -151,8 +155,45 @@ function buildPlace(dest) {
   try { installEnvironment(renderer, stage.scene); } catch (e) {}
   try { optimizeStage(stage); } catch (e) {}
   const st = { stage, kind: dest.kind, destId: dest.id, parcelsApi, npc };
+  if (dest.kind === 'casino') { try { addHouseGames(st); } catch (e) {} }
   places.set(cacheKey, st);
   return st;
+}
+
+// Pre-placed, always-playable "house" machines so you can walk up and play
+// immediately (no building required). Placed in open space near the spawn.
+const HOUSE_LAYOUT = [
+  { type: 'slots', dx: -10, dz: -7 }, { type: 'slots', dx: -7, dz: -7 },
+  { type: 'slots', dx: 7, dz: -7 }, { type: 'slots', dx: 10, dz: -7 },
+  { type: 'slots', dx: -10, dz: -11 }, { type: 'slots', dx: 10, dz: -11 },
+  { type: 'blackjack', dx: -8, dz: -13 }, { type: 'roulette', dx: 8, dz: -13 },
+];
+function pointBlocked(x, z, colliders) {
+  if (!Array.isArray(colliders)) return false;
+  for (const b of colliders) {
+    if (b && b.min && b.max && x >= b.min.x - 0.6 && x <= b.max.x + 0.6 && z >= b.min.z - 0.6 && z <= b.max.z + 0.6) return true;
+  }
+  return false;
+}
+function addHouseGames(st) {
+  if (st._house) return; st._house = true;
+  const sp = (st.stage && st.stage.spawn) || { x: 0, z: 0 };
+  for (const h of HOUSE_LAYOUT) {
+    const x = sp.x + h.dx, z = sp.z + h.dz;
+    if (pointBlocked(x, z, st.stage.colliders)) continue;
+    let prop = null; try { prop = createGameProp(h.type); } catch (e) {}
+    if (!prop) continue;
+    prop.position.set(x, 0, z);
+    prop.rotation.y = Math.PI;          // face back toward the spawn/aisle
+    prop.userData.animated = false;
+    try { st.stage.scene.add(prop); } catch (e) {}
+    const def = GAME_CATALOG[h.type];
+    st.stage.triggers.push({
+      pos: new THREE.Vector3(x, 1, z), radius: 2.4,
+      prompt: `[E] Play ${def ? def.name : h.type}`,
+      action: () => { player.unlock(); sfx('click'); openGame(h.type, def ? def.mechanics : {}); },
+    });
+  }
 }
 
 // Some stages (e.g. arena) only ship localized/emissive lights, leaving the
