@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Digital Casinos — Voxel Open World</title>
+  <link rel="stylesheet" href="./css/style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- Loading / start screen -->
+  <div id="startScreen" class="overlay">
+    <div class="panel">
+      <h1>DIGITAL <span class="neon">CASINOS</span></h1>
+      <p class="tag">An open voxel world. Buy land. Build casinos. Run the house.</p>
+      <ul class="controls-list">
+        <li><b>WASD</b> move &nbsp; <b>Mouse</b> look &nbsp; <b>Space</b> jump &nbsp; <b>Shift</b> sprint</li>
+        <li><b>B</b> buy the parcel you're standing on</li>
+        <li><b>C</b> construct a casino on your owned parcel</li>
+        <li><b>E</b> enter casino / sit at a game / use exits</li>
+        <li><b>G</b> (inside a casino) toggle game-placement mode</li>
+        <li><b>M</b> world map &nbsp; <b>Esc</b> release mouse</li>
+      </ul>
+      <button id="playBtn">ENTER THE WORLD</button>
+      <p class="hint">Tip: you start with coins. Find an empty green parcel and press <b>B</b>.</p>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="coins">🪙 <span id="coinValue">0</span></div>
+    <div id="locationInfo"></div>
+    <div id="crosshair">+</div>
+    <div id="prompt"></div>
+    <div id="toast"></div>
+  </div>
+
+  <!-- World map -->
+  <div id="mapScreen" class="overlay hidden">
+    <div class="panel map-panel">
+      <h2>World Map</h2>
+      <canvas id="mapCanvas" width="512" height="512"></canvas>
+      <div class="map-legend">
+        <span><i class="sw owned"></i> You own</span>
+        <span><i class="sw casino"></i> Casino</span>
+        <span><i class="sw other"></i> Unowned</span>
+        <span><i class="sw you"></i> You</span>
+      </div>
+      <button class="close-map">Close (M)</button>
+    </div>
+  </div>
+
+  <!-- Game placement palette (inside casino) -->
+  <div id="palette" class="hidden">
+    <div class="palette-title">Build Mode — pick a machine, then click the floor</div>
+    <div class="palette-items"></div>
+    <div class="palette-hint">Press <b>G</b> to exit build mode · <b>X</b> + click to remove</div>
+  </div>
+
+  <!-- Modal host for casino games -->
+  <div id="modalHost" class="overlay hidden"></div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
